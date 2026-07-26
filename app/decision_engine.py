@@ -65,6 +65,35 @@ _DISTRESS_ENDED_REPLY = (
     "{{callsign}}, roger, distress cancelled. All stations, DISTRESS TRAFFIC ENDED."
 )
 
+# A MAYDAY call very often already says what the crew intends to do ("engine
+# failure, returning to the field"). That utterance is consumed by the intercept
+# below, so without capturing it here the emergency flow would ask for something
+# it has just been told. The patterns mirror the ok_next triggers in
+# emergency-v1.yaml, which grade the same intentions on later transmissions.
+_EMERGENCY_INTENTIONS: List[Tuple[str, re.Pattern]] = [
+    ("return", re.compile(
+        r"return|returning|come back|back to (?:the )?(?:field|airport|departure)"
+        r"|land(?:ing)? (?:back|here|immediately|as soon)|immediate landing",
+        re.IGNORECASE)),
+    ("divert", re.compile(
+        r"divert|diverting|alternate|nearest (?:suitable )?(?:airport|airfield|aerodrome)",
+        re.IGNORECASE)),
+    ("hold", re.compile(
+        r"\bhold(?:ing)?\b|\borbit(?:ing)?\b|need time|troubleshoot",
+        re.IGNORECASE)),
+    ("continue", re.compile(
+        r"continue|continuing|carry on|able to continue|situation under control",
+        re.IGNORECASE)),
+]
+
+
+def _stated_intention(utterance: str) -> str:
+    """The intention named in the utterance, or "" when none was stated."""
+    for name, pattern in _EMERGENCY_INTENTIONS:
+        if pattern.search(utterance):
+            return name
+    return ""
+
 
 # ---------------------------------------------------------------------------
 # Global greeting intercept
@@ -459,6 +488,17 @@ def process_transmission(
                 # parent flow.  Stored in variables (carried across flow chains),
                 # not flags (which are bool-typed and flow-scoped).
                 session.variables["_emergency_active"] = True
+                # Carry any intention stated in the MAYDAY call itself, so the
+                # emergency flow does not ask for what it has just been told.
+                # Always written (empty when none was stated) so a previous
+                # emergency's answer cannot leak into this one.
+                stated = _stated_intention(request.pilot_utterance)
+                session.variables["emergency_intention"] = stated
+                if stated:
+                    trace.append(_trace(
+                        "emergency_intention",
+                        f"Intention '{stated}' taken from the MAYDAY call — not asking again",
+                    ))
                 trace.append(_trace(
                     "emergency_override",
                     f"Global MAYDAY/PAN-PAN — suspending '{flow.slug}' → "

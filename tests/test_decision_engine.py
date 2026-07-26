@@ -572,13 +572,15 @@ class TestFlowInterrupt:
             clearance_session.session_id,
             DecisionRequest(pilot_utterance="MAYDAY MAYDAY MAYDAY"),
         )
-        # Now at PILOT_STATES_EMERGENCY — pilot states the emergency
+        # Now at PILOT_STATES_EMERGENCY — pilot states the emergency, and names
+        # their intention in the same call, so ATC clears the return instead of
+        # asking for an intention it has already been told.
         resp = process_transmission(
             clearance_session.session_id,
             DecisionRequest(pilot_utterance="MAYDAY MAYDAY MAYDAY, DLH39A, engine fire, 150 souls, 2 hours fuel, returning to stand"),
         )
-        # Advances through ATC_EMERGENCY_RESPONSE (auto) → PILOT_INTENTIONS
-        assert resp.next_state_id == "PILOT_INTENTIONS"
+        assert resp.next_state_id == "PILOT_APPROACH_READBACK"
+        assert "cleared to return" in (resp.controller_say_rendered or "").lower()
 
     def test_mayday_during_readback_bypasses_readback_check(self, clearance_session):
         """MAYDAY mid-readback must not be blocked by the readback evaluator."""
@@ -606,15 +608,17 @@ class TestFlowInterrupt:
             clearance_session.session_id,
             DecisionRequest(pilot_utterance="MAYDAY MAYDAY MAYDAY"),
         )
-        # 2. State emergency details (→ PILOT_INTENTIONS)
+        # 2. State emergency details with intentions (→ ATC clears the return,
+        #    which the pilot must read back)
         process_transmission(
             clearance_session.session_id,
             DecisionRequest(pilot_utterance="engine fire, 150 souls, fuel 2 hours, returning to stand"),
         )
-        # 3. State intentions — reaches EMERGENCY_COMPLETE, engine pops flow
+        # 3. Read the return clearance back — reaches EMERGENCY_COMPLETE and the
+        #    engine pops back to the interrupted flow
         resp = process_transmission(
             clearance_session.session_id,
-            DecisionRequest(pilot_utterance="DLH39A, returning to stand"),
+            DecisionRequest(pilot_utterance="descend altitude 3000 feet, approach runway 25L, DLH39A"),
         )
         session = get_session(clearance_session.session_id)
         # Stack should be empty again; active flow back to clearance

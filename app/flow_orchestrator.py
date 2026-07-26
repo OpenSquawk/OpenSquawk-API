@@ -61,6 +61,18 @@ def push_flow(session: RuntimeSession, new_flow_slug: str, new_state_id: str) ->
     session.active_flow = new_flow_slug
     session.current_state = new_state_id
 
+    # Seed variables the interrupt flow declares but the session has never seen.
+    # Only a main flow gets its variables initialised at session creation, so an
+    # interrupt flow's own variables were rendering as "[name?]" in its
+    # templates. Values the session already carries win — the interrupt is
+    # happening to this flight, and its callsign and runway still apply.
+    try:
+        new_flow = get_flow(new_flow_slug)
+    except KeyError:
+        return
+    for name, definition in new_flow.variables.items():
+        session.variables.setdefault(name, definition.initial)
+
 
 def pop_flow(session: RuntimeSession) -> Tuple[Optional[str], Optional[str]]:
     """Resume the most recently interrupted flow.
