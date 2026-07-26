@@ -24,6 +24,7 @@ from typing import Dict, Optional
 
 from app.config import SESSION_DB_PATH, SESSION_STORE_TYPE, SESSION_TTL_HOURS
 from app.models import DecisionFlow, RuntimeSession
+from app.phraseology import phrase_variables
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,10 @@ def create_session(
     # Initialise variables and flags from flow definitions
     variables = {k: v.initial for k, v in flow.variables.items()}
     flags = {k: f.initial for k, f in flow.flags.items()}
+
+    # Region-dependent phrases ("identified" vs "radar contact"). Seeded before
+    # the caller's overrides so an explicit value still wins.
+    variables.update(phrase_variables(airport_icao))
 
     # Apply caller-supplied overrides.
     # Declared keys are already initialised above; extra keys (e.g. frequencies

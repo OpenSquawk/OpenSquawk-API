@@ -18,6 +18,11 @@ READBACK_TIMEOUT_MS = int(os.getenv("READBACK_TIMEOUT_MS", "30000"))
 READBACK_SILENCE_MS = int(os.getenv("READBACK_SILENCE_MS", "40000"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
 
+# Which radiotelephony phraseology the controller uses: "icao", "faa", or
+# "auto" (default) to derive it from the airport's ICAO location indicator.
+# See app/phraseology.py.
+PHRASEOLOGY_REGION = os.getenv("PHRASEOLOGY_REGION", "auto")
+
 # --- LLM semantic router ----------------------------------------------------
 # When deterministic regex routing fails to match a pilot transmission, the
 # engine asks the LLM (via the Nuxt /api/decision/route endpoint) to pick the

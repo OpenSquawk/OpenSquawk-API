@@ -73,6 +73,10 @@ READBACK_TIMEOUT_MS=30000
 READBACK_SILENCE_MS=40000
 LOG_LEVEL=info
 
+# Funksprech-Region: "icao" (z. B. "identified"), "faa" ("radar contact") oder
+# "auto" — dann aus dem ICAO-Code des Flughafens abgeleitet (K/C/P = FAA).
+PHRASEOLOGY_REGION=auto
+
 # LLM-Router: bei Regex-Miss fragt die Engine das LLM (über den Nuxt-Endpoint
 # /api/decision/route), welcher Kandidat zur — oft STT-verrauschten —
 # Transkription passt, bevor sie auf bad_next zurückfällt.

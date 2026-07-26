@@ -92,7 +92,9 @@ states:
     phase: departure
     name: "Departure Establishes Radar Contact"
     description: "Departure controller identifies the aircraft and issues a new climb clearance with routing"
-    say_template: "{{callsign}}, radar contact, climb {{climb_altitude}}, direct {{waypoint}}"
+    # "identified" (ICAO) / "radar contact" (FAA) — resolved per session from
+    # the airport's region. See app/phraseology.py.
+    say_template: "{{callsign}}, {{radar_identification}}, climb {{climb_altitude}}, direct {{waypoint}}"
     frequency_name: "Departure"
 
     ok_next: []
