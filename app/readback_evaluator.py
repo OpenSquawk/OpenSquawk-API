@@ -454,6 +454,94 @@ def _fuzzy_waypoint_match(value: str, utterance: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# "Correction" — the pilot withdrawing what they just said
+# ---------------------------------------------------------------------------
+# Standard phraseology: everything after CORRECTION supersedes what came before
+# it. Searching the whole transmission for each expected value ignores that, so
+# a pilot who read back the right squawk, said "correction", then read back a
+# different one was graded correct.
+#
+# A correction only supersedes the item it actually restates — correcting the
+# squawk must leave a correctly read-back altitude standing. Which item that is
+# comes from the keyword that introduced the value ("squawk 2341", "climb
+# 5000", "via BIBAX1N"): if the same keyword reappears after the marker, the
+# pilot restated that item and the earlier value no longer counts.
+
+_CORRECTION_RE = re.compile(
+    r'\b(?:negative\W+)?correction\b'
+    r'|\bberichtigung\b|\bkorrektur\b',
+    re.IGNORECASE,
+)
+
+# Keywords that introduce a clearance item on the radio.
+_ITEM_KEYWORDS = (
+    'squawk', 'climb', 'climbing', 'descend', 'descending', 'maintain',
+    'passing', 'initially', 'runway', 'contact', 'direct', 'via', 'cleared',
+    'heading', 'qnh', 'altitude', 'level', 'stand', 'gate', 'taxi', 'wind',
+    'information', 'expect', 'hold', 'cross', 'monitor',
+)
+
+# How far back to look for the keyword that introduced a value.
+_KEYWORD_LOOKBEHIND = 40
+
+
+def _split_at_correction(utterance: str) -> Optional[Tuple[str, str]]:
+    """``(before, after)`` around the last correction marker, or None."""
+    markers = list(_CORRECTION_RE.finditer(utterance))
+    if not markers:
+        return None
+    last = markers[-1]
+    return utterance[:last.start()], utterance[last.end():]
+
+
+def _value_span(expected_str: str, text: str) -> Optional[Tuple[int, int]]:
+    """Where the expected value appears in ``text`` — literal/spoken/phonetic."""
+    for form in spoken_forms(expected_str):
+        if not form:
+            continue
+        m = re.search(_tolerant_form_regex(form), text, re.IGNORECASE)
+        if m:
+            return m.span()
+    digits = re.sub(r'\D', '', expected_str)
+    if len(digits) >= 2:
+        seq = _DIGIT_SEQ_SEP.join(_DIGIT_PHONETICS[d] for d in digits)
+        m = re.search(seq, text, re.IGNORECASE)
+        if m:
+            return m.span()
+    if _value_is_icao_ident(expected_str):
+        try:
+            m = re.search(_icao_identifier_regex(expected_str), text, re.IGNORECASE)
+            if m:
+                return m.span()
+        except re.error:
+            pass
+    return None
+
+
+def _introducing_keyword(expected_str: str, text: str) -> Optional[str]:
+    """The R/T keyword that introduced this value, e.g. "squawk" for "squawk 2341"."""
+    span = _value_span(expected_str, text)
+    if span is None:
+        return None
+    window = text[max(0, span[0] - _KEYWORD_LOOKBEHIND):span[0]].lower()
+    found = [(window.rfind(k), k) for k in _ITEM_KEYWORDS]
+    best = max((pos, k) for pos, k in found)
+    return best[1] if best[0] >= 0 else None
+
+
+def _superseded_by_correction(expected_str: str, before: str, after: str) -> bool:
+    """True when the correction restated this item, withdrawing the earlier value.
+
+    Conservative on purpose: without a keyword to identify the item, the value
+    is left standing rather than failing a readback that may well be correct.
+    """
+    keyword = _introducing_keyword(expected_str, before)
+    if keyword is None:
+        return False
+    return bool(re.search(rf'\b{re.escape(keyword)}\b', after, re.IGNORECASE))
+
+
+# ---------------------------------------------------------------------------
 # Core evaluator
 # ---------------------------------------------------------------------------
 
@@ -585,6 +673,20 @@ def evaluate_readback_simple(
     missing: List[str] = []
     reports: List[Dict[str, Any]] = []
     utterance = pilot_utterance
+    correction = _split_at_correction(utterance)
+
+    def match_field(expected_str: str) -> Tuple[bool, Optional[str], List[str]]:
+        """Match one value, honouring a "correction" the pilot transmitted."""
+        matched, matched_via, forms = _match_readback_value(expected_str, utterance)
+        if not matched or correction is None:
+            return matched, matched_via, forms
+        before, after = correction
+        # Still stated after the correction — nothing was withdrawn.
+        if _match_readback_value(expected_str, after)[0]:
+            return matched, f"{matched_via} (after correction)", forms
+        if _superseded_by_correction(expected_str, before, after):
+            return False, None, forms
+        return matched, matched_via, forms
 
     for field in readback_required:
         expected = variables.get(field)
@@ -597,7 +699,7 @@ def evaluate_readback_simple(
                 item_str = "" if item is None else str(item).strip()
                 if not item_str:
                     continue
-                matched, matched_via, forms = _match_readback_value(item_str, utterance)
+                matched, matched_via, forms = match_field(item_str)
                 reports.append({
                     "field": field,
                     "expected": item_str,
@@ -610,7 +712,7 @@ def evaluate_readback_simple(
             continue
 
         expected_str = "" if expected is None else str(expected).strip()
-        matched, matched_via, forms = _match_readback_value(expected_str, utterance)
+        matched, matched_via, forms = match_field(expected_str)
 
         report: Dict[str, Any] = {
             "field": field,
