@@ -14,8 +14,12 @@ MAX_FLOW_STACK_DEPTH = int(os.getenv("MAX_FLOW_STACK_DEPTH", "5"))
 MAX_AUTO_ADVANCE_HOPS = int(os.getenv("MAX_AUTO_ADVANCE_HOPS", "50"))
 READBACK_TIMEOUT_MS = int(os.getenv("READBACK_TIMEOUT_MS", "30000"))
 # Silence window on a readback state before ATC re-requests the readback.
-# The frontend fires POST /session/{id}/timeout once this elapses with no utterance.
-READBACK_SILENCE_MS = int(os.getenv("READBACK_SILENCE_MS", "40000"))
+# The frontend fires POST /session/{id}/timeout once this elapses with no
+# utterance; the window is published on every readback state in the runtime
+# tree. A controller waiting on a mandatory readback chases it within seconds,
+# not the best part of a minute — 12 s sits inside the 10–15 s that was asked
+# for and leaves room for a slow reader.
+READBACK_SILENCE_MS = int(os.getenv("READBACK_SILENCE_MS", "12000"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
 
 # Which radiotelephony phraseology the controller uses: "icao", "faa", or

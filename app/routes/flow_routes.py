@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
+from app import config
 from app.flow_loader import get_all_flows, reload_flows
 from app.flow_validator import validate_flow
 
@@ -29,8 +30,24 @@ def get_runtime_flows():
     return {
         "main": main_slug,
         "order": order,
-        "flows": {slug: flow.model_dump() for slug, flow in flows.items()},
+        "flows": {slug: _runtime_flow_payload(flow) for slug, flow in flows.items()},
     }
+
+
+def _runtime_flow_payload(flow) -> dict:
+    """Serialise a flow for the frontend, publishing the readback silence window.
+
+    A readback state has no ``auto_advance_timeout_ms`` — it waits for the pilot
+    rather than advancing on its own — so the frontend had nothing to arm a
+    timer from and the "no readback heard, ask again" path never fired at all.
+    The window is a server-side policy, so it is attached here rather than
+    duplicated as a frontend default.
+    """
+    payload = flow.model_dump()
+    for state_id, state in flow.states.items():
+        if state.role == "pilot" and state.readback_required:
+            payload["states"][state_id]["readback_silence_ms"] = config.READBACK_SILENCE_MS
+    return payload
 
 
 @router.get("/runtime/{slug}")
