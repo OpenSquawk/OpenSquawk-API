@@ -10,6 +10,33 @@ from pathlib import Path
 
 import pytest
 
+from app import config
+
+
+SHIPPED_RTO_PROBABILITY = config.RTO_PROBABILITY
+
+
+@pytest.fixture
+def shipped_rto_probability() -> float:
+    """The configured default, captured before the suite zeroes it below."""
+    return SHIPPED_RTO_PROBABILITY
+
+
+@pytest.fixture(autouse=True)
+def _no_random_rejected_takeoffs():
+    """Take the rejected-takeoff dice out of the suite.
+
+    An ordinary departure carries a small chance of Tower cancelling the
+    takeoff. Left enabled, that fires in maybe one run in a few hundred and
+    breaks whichever test happened to be driving a departure at the time — a
+    flake that looks like a real failure. Tests that care set the probability
+    themselves or use the force_rto override.
+    """
+    original = config.RTO_PROBABILITY
+    config.RTO_PROBABILITY = 0.0
+    yield
+    config.RTO_PROBABILITY = original
+
 from app.models import (
     Action,
     DecisionFlow,

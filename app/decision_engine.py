@@ -529,8 +529,12 @@ def process_transmission(
         logger.warning("✗ TRANSMIT  session=%.8s  NOT FOUND", session_id)
         raise KeyError(f"Session '{session_id}' not found")
 
-    # --- Step 2: Timer check (stub — timers not yet implemented) ---
-    # TODO: check expired active_timers and auto-advance accordingly
+    # --- Step 2: Timers ---
+    # Nothing to do here: waiting is client-driven. The client knows when the
+    # pilot is mid-transmission, so it owns the timer and calls
+    # POST /session/{id}/timeout when a state's window expires (see
+    # process_timeout). Duplicating that server-side would need the two kept in
+    # step for no gain.
 
     # --- Step 3: Load current state ---
     flow = get_flow(session.active_flow)

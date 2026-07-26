@@ -55,9 +55,11 @@ def _at_takeoff_readback(force_rto=None):
 
 
 class TestTheRoll:
-    def test_default_probability_is_tiny(self):
-        assert 0 < config.RTO_PROBABILITY <= 0.01, (
-            f"{config.RTO_PROBABILITY} is far too likely for an unannounced RTO"
+    def test_default_probability_is_tiny(self, shipped_rto_probability):
+        # The suite runs with the roll disabled, so this reads the shipped
+        # default rather than the value tests see.
+        assert 0 < shipped_rto_probability <= 0.01, (
+            f"{shipped_rto_probability} is far too likely for an unannounced RTO"
         )
 
     def test_probability_zero_never_fires(self, monkeypatch):

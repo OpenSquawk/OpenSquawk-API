@@ -285,10 +285,13 @@ on_enter_actions:
 
   - type: log
     target: clearance_complete      # emits a named event to the trace
-
-  - type: call_service
-    target: service_name            # reserved for future external integrations
 ```
+
+There is no `call_service` action. One was reserved for future external
+integrations and accepted by the schema while doing nothing but logging a
+warning — a flow author could wire a side effect to it and watch it silently
+never happen. It is rejected at load time now; add it back together with
+something that actually executes it.
 
 ---
 

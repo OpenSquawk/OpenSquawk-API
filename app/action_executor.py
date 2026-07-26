@@ -46,10 +46,4 @@ def _execute_one(action: Action, session: RuntimeSession) -> str:
         logger.info("Action log [session=%s]: %s", session.session_id, action.target)
         return msg
 
-    if action.type == "call_service":
-        # Stub: services not yet implemented
-        msg = f"call_service '{action.target}' (stub — not implemented)"
-        logger.warning(msg)
-        return msg
-
     return f"unknown action type '{action.type}'"

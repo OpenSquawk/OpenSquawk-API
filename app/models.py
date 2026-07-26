@@ -25,7 +25,10 @@ class Guard(BaseModel):
 
 class Action(BaseModel):
     """Side effect executed when entering/exiting a state."""
-    type: Literal["set_variable", "set_flag", "call_service", "log"]
+    # No "call_service": it was accepted by the schema and did nothing but log a
+    # warning, so a flow author could wire a side effect to it and watch it
+    # silently never happen. Rejected at load time until something executes it.
+    type: Literal["set_variable", "set_flag", "log"]
     target: str
     value: Optional[Any] = None
 
@@ -225,7 +228,12 @@ class RuntimeSession(BaseModel):
     # "say again" repeats it with the variable values current at that moment.
     last_controller_say: Optional[str] = None
 
-    active_timers: List[Dict] = Field(default_factory=list)
+    # (There is deliberately no server-side timer list here. Waiting is driven
+    # from the client, which knows when the pilot is mid-transmission: it arms a
+    # timer from the state's own window and calls POST /session/{id}/timeout when
+    # it expires. A second, server-side set of timers would have to be kept in
+    # step with that one for no gain. Old sessions may still carry an
+    # `active_timers` key; Pydantic ignores it.)
 
     # Latest normalised telemetry scalars from the sim bridge (empty when flying
     # without a bridge). Keys are TelemetryParameter values.

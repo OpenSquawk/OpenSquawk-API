@@ -2,6 +2,7 @@
 
 import logging
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,10 +49,36 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         return response
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Load and validate the flows before the first request is served."""
+    _load_and_validate_flows()
+    yield
+
+
+def _load_and_validate_flows() -> None:
+    if not FLOWS_DIR.exists():
+        logger.warning("Flows directory '%s' does not exist — no flows loaded", FLOWS_DIR)
+        return
+
+    flows = load_all_flows(FLOWS_DIR)
+
+    for slug, flow in flows.items():
+        result = validate_flow(flow)
+        for issue in result.issues:
+            log = logger.error if issue.severity == "error" else logger.warning
+            log("[flow=%s] %s: %s", slug, issue.severity.upper(), issue.message)
+        if result.valid:
+            logger.info("[flow=%s] validation passed", slug)
+        else:
+            logger.error("[flow=%s] validation FAILED — fix errors before use", slug)
+
+
 app = FastAPI(
     title="OpenSquawk LiveATC API",
     description="PM radio training backend — Phase 1/2 (deterministic routing)",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # Middleware order matters: CORS first, logging second (so CORS headers are set
@@ -68,25 +95,6 @@ app.include_router(flow_router)
 app.include_router(session_router)
 app.include_router(decision_router)
 app.include_router(tool_router)
-
-
-@app.on_event("startup")
-def _startup():
-    if not FLOWS_DIR.exists():
-        logger.warning("Flows directory '%s' does not exist — no flows loaded", FLOWS_DIR)
-        return
-
-    flows = load_all_flows(FLOWS_DIR)
-
-    for slug, flow in flows.items():
-        result = validate_flow(flow)
-        for issue in result.issues:
-            log = logger.error if issue.severity == "error" else logger.warning
-            log("[flow=%s] %s: %s", slug, issue.severity.upper(), issue.message)
-        if result.valid:
-            logger.info("[flow=%s] validation passed", slug)
-        else:
-            logger.error("[flow=%s] validation FAILED — fix errors before use", slug)
 
 
 @app.get("/")
