@@ -29,9 +29,17 @@ variables:
     type: string
     initial: "1013"
     mutable_by: action_only
+  # Default facing. Derived from the runway in use at session creation (see
+  # app/pushback.py) — the literal below only applies when no runway is known.
   pushback_direction:
     type: string
     initial: "west"
+    mutable_by: action_only
+  # The facing the pilot offered, when they offered one. Set by the engine and
+  # quoted back when ground has to refuse it.
+  requested_pushback_direction:
+    type: string
+    initial: ""
     mutable_by: action_only
   runway:
     type: string
@@ -67,6 +75,11 @@ flags:
   pushback_approved:
     initial: false
   taxi_clearance_given:
+    initial: false
+  # Set by the engine when the facing the pilot offered does not work for the
+  # runway in use, so ground refuses it out loud instead of silently assigning
+  # a different one.
+  pushback_facing_refused:
     initial: false
 
 states:
@@ -260,6 +273,14 @@ states:
     frequency_name: "Ground"
 
     ok_next:
+      # The pilot offered a facing the runway in use does not allow. Ground has
+      # to say so rather than quietly reading out a different direction.
+      - to: ATC_PUSHBACK_FACING_REFUSED
+        trigger: "push.*back|pushback|facing"
+        condition:
+          type: flag_check
+          name: pushback_facing_refused
+        label: "Requested facing not workable — ground refuses and assigns one"
       - to: ATC_PUSHBACK_CLEARANCE
         trigger: "push.*back|pushback"
         label: "Pilot requested pushback"
@@ -288,6 +309,25 @@ states:
   # ─────────────────────────────────────────────────────────────────────────────
   # 6. Ground issues pushback clearance with facing direction
   # ─────────────────────────────────────────────────────────────────────────────
+  ATC_PUSHBACK_FACING_REFUSED:
+    role: atc
+    phase: taxi
+    name: "Ground Refuses the Requested Facing"
+    description: "The facing the pilot offered does not work for the runway in use; ground assigns another"
+    say_template: "{{callsign}}, negative, unable facing {{requested_pushback_direction}}. Pushback approved, face {{pushback_direction}}"
+    frequency: "121.800"
+    frequency_name: "Ground"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_PUSHBACK_READBACK
+        label: "Facing assigned — awaiting pilot readback"
+        on_enter_actions:
+          - type: set_flag
+            target: pushback_approved
+            value: true
+
   ATC_PUSHBACK_CLEARANCE:
     role: atc
     phase: taxi

@@ -31,6 +31,7 @@ from app.models import (
     Transition,
     TransitionTrace,
 )
+from app.pushback import assignable_facing, facing_is_workable, requested_facing
 from app.readback_evaluator import check_readback
 from app.session_store import get_session, save_session
 from app.template_renderer import render_template
@@ -95,6 +96,51 @@ def _stated_intention(utterance: str) -> str:
     return ""
 
 
+def _apply_pushback_facing(session: RuntimeSession, state: DecisionState, utterance: str,
+                           trace: List[TransitionTrace]) -> None:
+    """Honour a facing the pilot offered, or mark it refused.
+
+    A crew routinely says "able to push facing north". That was ignored — ground
+    always read out the flow's own default. The offer is now checked against the
+    runway in use (see app/pushback.py) and either becomes the assigned facing
+    or is explicitly refused, so the flow can say so rather than silently
+    assigning something else.
+    """
+    if "pushback_direction" not in session.variables:
+        return
+    # A facing belongs to a *request*. On a readback state the pilot is quoting
+    # a clearance ATC already issued, and rewriting the variable there would
+    # move the target the readback is graded against — a wrong facing would
+    # grade itself correct.
+    if state.readback_required:
+        return
+    wanted = requested_facing(utterance)
+    if wanted is None:
+        return
+
+    runway = str(session.variables.get("runway") or "")
+    assigned = assignable_facing(runway)
+    session.variables["requested_pushback_direction"] = wanted
+
+    if facing_is_workable(wanted, runway):
+        session.variables["pushback_direction"] = wanted
+        session.flags["pushback_facing_refused"] = False
+        trace.append(_trace(
+            "pushback_facing",
+            f"Pilot offered facing {wanted} — workable for runway {runway}, approved",
+        ))
+        return
+
+    if assigned:
+        session.variables["pushback_direction"] = assigned
+    session.flags["pushback_facing_refused"] = True
+    trace.append(_trace(
+        "pushback_facing",
+        f"Pilot offered facing {wanted} — not workable for runway {runway}; "
+        f"assigning {session.variables.get('pushback_direction')}",
+    ))
+
+
 # ---------------------------------------------------------------------------
 # Global greeting intercept
 # ---------------------------------------------------------------------------
@@ -137,6 +183,51 @@ _SAY_AGAIN_RE = re.compile(
 # waypoint); after this many failed attempts ATC gives up and moves on.
 _MAX_READBACK_ATTEMPTS = 3
 _READBACK_SKIP_NOTICE = "{{callsign}}, readback not correct, continuing for now. "
+
+
+# ---------------------------------------------------------------------------
+# Backtrack requests
+# ---------------------------------------------------------------------------
+# "request backtrack", "we require backtrack runway 25L" — a supplementary
+# request a crew makes alongside the normal call. No flow had a transition for
+# it, so it fell through to the correction prompt and the request itself went
+# unanswered, which is what was reported as being ignored.
+#
+# The answer depends on where the aircraft is: approaching the runway it is
+# approved, still taxiing it is acknowledged for later, and once the takeoff
+# clearance is out or the aircraft is airborne it does not apply at all. Like
+# "say again", this answers without moving the training state — the pilot then
+# makes their normal call.
+
+_BACKTRACK_RE = re.compile(
+    r"\bback[\s\-]?track\b"
+    r"|\bbacktracking\b",
+    re.IGNORECASE,
+)
+
+_BACKTRACK_APPROVED = (
+    "{{callsign}}, backtrack runway {{runway}} approved, report lined up"
+)
+_BACKTRACK_EXPECT = (
+    "{{callsign}}, roger, expect backtrack runway {{runway}}"
+)
+_BACKTRACK_NOT_APPLICABLE = (
+    "{{callsign}}, negative, backtrack not applicable at this point"
+)
+
+
+def _backtrack_reply(state: DecisionState, session: RuntimeSession) -> Optional[str]:
+    """ATC's answer to a backtrack request, or None when it makes no sense here."""
+    if not session.variables.get("runway"):
+        return None
+    # Already cleared to go, or in the air — the request has been overtaken.
+    if session.flags.get("takeoff_clearance_issued") or session.flags.get("airborne"):
+        return _BACKTRACK_NOT_APPLICABLE
+    if state.phase == "tower":
+        return _BACKTRACK_APPROVED
+    if state.phase == "taxi":
+        return _BACKTRACK_EXPECT
+    return _BACKTRACK_NOT_APPLICABLE
 
 
 def _is_greeting(utterance: str) -> bool:
@@ -560,6 +651,33 @@ def process_transmission(
                 request.pilot_utterance, "say_again", trace,
             )
 
+    # --- Step 5b3: Global backtrack-request intercept ---
+    # Guarded by the same specific-trigger check as "say again": a call that also
+    # makes the request the state is waiting for is routed normally instead.
+    if (
+        selected_transition is None
+        and _BACKTRACK_RE.search(request.pilot_utterance)
+        and not _matches_specific_trigger(
+            request.pilot_utterance, current_state, session.variables, session.flags,
+        )
+    ):
+        reply = _backtrack_reply(current_state, session)
+        if reply is not None:
+            trace.append(_trace(
+                "backtrack_request",
+                f"Backtrack requested at '{current_state.id}' (phase={current_state.phase})",
+            ))
+            _log_result(
+                session_id=session_id, state_in=current_state.id,
+                state_out=current_state.id, match_reason="backtrack_request",
+                auto_advanced=[], fallback_used=False, fallback_reason=None,
+                say_template=reply, trace=trace,
+            )
+            return _build_stay_response(
+                session, current_state, reply,
+                request.pilot_utterance, "backtrack_request", trace,
+            )
+
     # --- Step 5c: Global greeting intercept (optional courtesy call) ---
     # Only at initial-contact states, and only when the utterance does NOT also
     # match a real request trigger (an ok_next match takes precedence below).
@@ -587,6 +705,12 @@ def process_transmission(
                 session, current_state, _GREETING_REPLY,
                 request.pilot_utterance, "greeting", trace,
             )
+
+    # --- Step 5d: Honour a pushback facing the pilot offered ---
+    # Runs before matching so the transition guards below see the resolved
+    # facing and the flow can either approve it or refuse it explicitly.
+    if selected_transition is None:
+        _apply_pushback_facing(session, current_state, request.pilot_utterance, trace)
 
     # --- Step 6: Match utterance against state candidates (if not already an emergency) ---
     if selected_transition is None:

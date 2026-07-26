@@ -25,6 +25,7 @@ from typing import Dict, Optional
 from app.config import SESSION_DB_PATH, SESSION_STORE_TYPE, SESSION_TTL_HOURS
 from app.models import DecisionFlow, RuntimeSession
 from app.phraseology import phrase_variables
+from app.pushback import assignable_facing
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,14 @@ def create_session(
     if variable_overrides:
         for key, value in variable_overrides.items():
             variables[key] = value
+
+    # Default pushback facing follows the runway in use rather than a fixed
+    # compass point, which was wrong at every field whose departure runway does
+    # not point that way. An explicit caller value still wins.
+    if "pushback_direction" in variables and not (variable_overrides or {}).get("pushback_direction"):
+        derived = assignable_facing(str(variables.get("runway") or ""))
+        if derived:
+            variables["pushback_direction"] = derived
 
     session = RuntimeSession(
         session_id=sid,
