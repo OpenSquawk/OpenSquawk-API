@@ -253,7 +253,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: VFR_ARRIVAL_COMPLETE
+      - to: ATC_JOIN_READBACK_CORRECT
         trigger: ".*"
         label: "Circuit-join readback evaluated — correct"
 
@@ -280,6 +280,23 @@ states:
   # ─────────────────────────────────────────────────────────────────────────────
   # 7. End state — continue on Tower for the circuit and landing
   # ─────────────────────────────────────────────────────────────────────────────
+  # The join clearance is the last thing said on this frequency before the flow
+  # hands over to the circuit; without a confirmation it ended on the pilot's
+  # own transmission, with no sign that the readback had been accepted.
+  ATC_JOIN_READBACK_CORRECT:
+    role: atc
+    phase: arrival
+    name: "Tower Confirms Join Readback"
+    description: "Tower confirms the join clearance readback was correct"
+    say_template: "Readback correct, {{callsign_short}}"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: VFR_ARRIVAL_COMPLETE
+        label: "Readback confirmed — joining the circuit"
+
   VFR_ARRIVAL_COMPLETE:
     role: system
     phase: arrival

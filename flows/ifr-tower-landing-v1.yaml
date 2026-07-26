@@ -112,7 +112,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: PILOT_RUNWAY_VACATED
+      - to: ATC_LANDING_READBACK_CORRECT
         trigger: ".*"
         label: "Landing readback evaluated — correct"
 
@@ -217,7 +217,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: TOWER_LANDING_COMPLETE
+      - to: ATC_TOWER_LANDING_HANDOFF_CONFIRMED
         trigger: ".*"
         label: "Ground frequency readback evaluated — correct"
 
@@ -240,6 +240,40 @@ states:
     auto_transitions:
       - to: PILOT_GROUND_FREQ_READBACK
         label: "Correction given — pilot to try again"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 5b. Confirmations — a correct readback that leaves the pilot waiting
+  # ─────────────────────────────────────────────────────────────────────────────
+  # After the landing clearance readback the pilot lands; nothing further is due
+  # from Tower until the runway is vacated, so the confirmation is what tells
+  # them the clearance was correctly acknowledged.
+  ATC_LANDING_READBACK_CORRECT:
+    role: atc
+    phase: tower
+    name: "Tower Confirms Landing Readback"
+    description: "Tower confirms the landing clearance readback was correct"
+    say_template: "Readback correct, {{callsign}}"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_RUNWAY_VACATED
+        label: "Readback confirmed — continuing to land"
+
+  ATC_TOWER_LANDING_HANDOFF_CONFIRMED:
+    role: atc
+    phase: tower
+    name: "Tower Releases the Pilot to Ground"
+    description: "Tower acknowledges the correct frequency readback and releases the pilot"
+    say_template: "{{callsign}}, good day"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: TOWER_LANDING_COMPLETE
+        label: "Tower phase complete — pilot switching to Ground"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # 6. End state — switching to Ground for taxi-in

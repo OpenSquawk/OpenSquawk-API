@@ -182,7 +182,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: PILOT_AWAIT_AIRBORNE
+      - to: ATC_TAKEOFF_READBACK_CORRECT
         trigger: ".*"
         label: "Takeoff readback evaluated — correct"
 
@@ -191,6 +191,23 @@ states:
         label: "Readback missing runway — controller corrects"
 
     auto_transitions: []
+
+  # No instruction follows a takeoff clearance readback, so the confirmation is
+  # what tells the pilot the clearance was correctly acknowledged. Without it
+  # the roll begins in silence, which a pilot cannot tell from not being heard.
+  ATC_TAKEOFF_READBACK_CORRECT:
+    role: atc
+    phase: tower
+    name: "Tower Confirms Takeoff Readback"
+    description: "Tower confirms the takeoff clearance readback was correct"
+    say_template: "Readback correct, {{callsign}}"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_AWAIT_AIRBORNE
+        label: "Readback confirmed — takeoff roll"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # 6b. Takeoff roll / initial climb — Tower waits until the aircraft is airborne

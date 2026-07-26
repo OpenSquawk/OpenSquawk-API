@@ -128,7 +128,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: PILOT_AWAIT_DESCENT_1
+      - to: ATC_DESCENT_1_READBACK_CORRECT
         trigger: ".*"
         label: "First descent readback evaluated — correct"
 
@@ -233,7 +233,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: PILOT_AWAIT_HANDOFF
+      - to: ATC_DESCENT_2_READBACK_CORRECT
         trigger: ".*"
         label: "Second descent readback evaluated — correct"
 
@@ -349,7 +349,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: ENROUTE_COMPLETE
+      - to: ATC_ENROUTE_HANDOFF_CONFIRMED
         trigger: ".*"
         label: "Approach frequency readback evaluated — correct"
 
@@ -372,6 +372,54 @@ states:
     auto_transitions:
       - to: PILOT_APPROACH_FREQ_READBACK
         label: "Correction given — pilot to try again"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 4c. Confirmations — a correct readback that leaves the pilot waiting
+  # ─────────────────────────────────────────────────────────────────────────────
+  # After each descent readback the pilot simply descends until the aircraft
+  # nears the level; no further instruction is due, so the confirmation is what
+  # tells them the readback was accepted rather than not heard.
+  ATC_DESCENT_1_READBACK_CORRECT:
+    role: atc
+    phase: enroute
+    name: "Center Confirms First Descent Readback"
+    description: "Area Control confirms the first descent readback was correct"
+    say_template: "Readback correct, {{callsign}}"
+    frequency_name: "Center"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_AWAIT_DESCENT_1
+        label: "Readback confirmed — descending"
+
+  ATC_DESCENT_2_READBACK_CORRECT:
+    role: atc
+    phase: enroute
+    name: "Center Confirms Second Descent Readback"
+    description: "Area Control confirms the second descent readback was correct"
+    say_template: "Readback correct, {{callsign}}"
+    frequency_name: "Center"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_AWAIT_HANDOFF
+        label: "Readback confirmed — descending"
+
+  ATC_ENROUTE_HANDOFF_CONFIRMED:
+    role: atc
+    phase: enroute
+    name: "Center Releases the Pilot to Approach"
+    description: "Area Control acknowledges the correct frequency readback and releases the pilot"
+    say_template: "{{callsign}}, good day"
+    frequency_name: "Center"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: ENROUTE_COMPLETE
+        label: "Enroute phase complete — pilot switching to Approach"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # 5. End state — switching to Approach

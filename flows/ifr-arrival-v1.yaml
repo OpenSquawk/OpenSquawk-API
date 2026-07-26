@@ -231,7 +231,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: PILOT_AWAIT_DESCENT
+      - to: ATC_DESCENT_READBACK_CORRECT
         trigger: ".*"
         label: "Descent readback evaluated — correct"
 
@@ -240,6 +240,23 @@ states:
         label: "Readback missing altitude, QNH, transition level or speed — controller corrects"
 
     auto_transitions: []
+
+  # The pilot now descends and waits; no further instruction is due until the
+  # aircraft nears the cleared altitude. Confirming here is what distinguishes
+  # an accepted readback from one that was never heard.
+  ATC_DESCENT_READBACK_CORRECT:
+    role: atc
+    phase: approach
+    name: "Approach Confirms Descent Readback"
+    description: "Approach confirms the descent readback was correct"
+    say_template: "Readback correct, {{callsign}}"
+    frequency_name: "Approach"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_AWAIT_DESCENT
+        label: "Readback confirmed — descending"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # 3b. Descent — Approach waits until the aircraft nears the cleared altitude
@@ -363,7 +380,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: PILOT_AWAIT_INTERCEPT
+      - to: ATC_VECTOR_READBACK_CORRECT
         trigger: ".*"
         label: "Vector readback evaluated — correct"
 
@@ -372,6 +389,20 @@ states:
         label: "Readback missing heading, altitude or speed — controller corrects"
 
     auto_transitions: []
+
+  ATC_VECTOR_READBACK_CORRECT:
+    role: atc
+    phase: approach
+    name: "Approach Confirms Vector Readback"
+    description: "Approach confirms the vector readback was correct"
+    say_template: "Readback correct, {{callsign}}"
+    frequency_name: "Approach"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_AWAIT_INTERCEPT
+        label: "Readback confirmed — flying the vector"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # 4b. Base/intercept — waits until the aircraft nears the intercept altitude
@@ -503,7 +534,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: PILOT_AWAIT_ESTABLISHED
+      - to: ATC_ILS_READBACK_CORRECT
         trigger: ".*"
         label: "ILS readback evaluated — correct"
 
@@ -512,6 +543,20 @@ states:
         label: "Readback missing heading, runway or speed — controller corrects"
 
     auto_transitions: []
+
+  ATC_ILS_READBACK_CORRECT:
+    role: atc
+    phase: approach
+    name: "Approach Confirms ILS Readback"
+    description: "Approach confirms the approach clearance readback was correct"
+    say_template: "Readback correct, {{callsign}}"
+    frequency_name: "Approach"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_AWAIT_ESTABLISHED
+        label: "Readback confirmed — intercepting"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # 5b. Intercepting the ILS — Tower handoff once close in / established
@@ -607,7 +652,7 @@ states:
     readback_mode: simple
 
     ok_next:
-      - to: APPROACH_COMPLETE
+      - to: ATC_APPROACH_HANDOFF_CONFIRMED
         trigger: ".*"
         label: "Tower frequency readback evaluated — correct"
 
@@ -616,6 +661,22 @@ states:
         label: "Readback missing tower frequency — controller corrects"
 
     auto_transitions: []
+
+  # The sign-off is the controller's last word on this frequency; without it the
+  # flow ended on the pilot's own transmission.
+  ATC_APPROACH_HANDOFF_CONFIRMED:
+    role: atc
+    phase: approach
+    name: "Approach Releases the Pilot to Tower"
+    description: "Approach acknowledges the correct frequency readback and releases the pilot"
+    say_template: "{{callsign}}, good day"
+    frequency_name: "Approach"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: APPROACH_COMPLETE
+        label: "Approach phase complete — pilot switching to tower"
 
   ATC_TOWER_FREQ_READBACK_INCORRECT:
     role: atc
