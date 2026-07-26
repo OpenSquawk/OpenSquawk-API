@@ -15,6 +15,7 @@ Phonetic forms are inferred from the value's pattern:
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 import jellyfish
@@ -229,22 +230,29 @@ def spoken_forms(value: str) -> List[str]:
 _PLACE_SHAPED = re.compile(r"^[^\W\d_][^\W\d_ .\-']*(?:[ .\-'][^\W\d_][^\W\d_ .\-']*)*$")
 
 
-def place_aliases(value: str) -> List[str]:
+@lru_cache(maxsize=2048)
+def place_aliases(value: str) -> Tuple[str, ...]:
     """Accepted alternative spoken values for a place-valued field.
 
     An airport is read back by ICAO code or by city name, in English or German
     — all of them correct. The aliases come from the bundled airport dataset,
-    so this holds for every airport rather than a hardcoded handful. A value
-    that is not place-shaped (a squawk, a level) never reaches the dataset.
+    so this holds for every airport rather than a hardcoded handful.
+
+    Two guards keep this off the hot path: a value that is not place-shaped (a
+    squawk, a level, a flight level) never reaches the dataset, and neither does
+    anything shorter than an ICAO code — a taxiway named "A" would otherwise
+    trigger a full scan of the airport table on every readback field.
     """
     v = value.strip()
-    if not v or not _PLACE_SHAPED.match(v):
-        return []
+    if len(v) < 4 or not _PLACE_SHAPED.match(v):
+        return ()
     try:
         from app.airport_data import spoken_place_aliases
-        return [a for a in spoken_place_aliases(v) if a.strip().lower() != v.lower()]
+        return tuple(
+            a for a in spoken_place_aliases(v) if a.strip().lower() != v.lower()
+        )
     except Exception:  # dataset missing/unreadable — fall back to literal only
-        return []
+        return ()
 
 
 def _value_is_icao_ident(value: str) -> bool:
@@ -357,6 +365,95 @@ def _fuzzy_ident_match(value: str, utterance: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Fuzzy waypoint matching
+# ---------------------------------------------------------------------------
+# ICAO five-letter name-codes (BIBAX, SULUS, ANEKI) are built to be pronounceable
+# and are spoken as words, never spelled — so STT returns English that merely
+# sounds like them ("Bibaks", "bee backs", "Sullus"). Neither the literal nor the
+# letter-by-letter phonetic regex matches that.
+#
+# Unlike a SID there is no digit or final letter to anchor the match, so the
+# safety argument rests elsewhere: ICAO assigns name-codes to be phonetically
+# distinct from one another, which makes Metaphone equality a strong signal —
+# every mangling of a waypoint shares its Metaphone, while two different
+# waypoints do not. Jaro-Winkler carries the rest, with the floor set above the
+# worst observed distinct-waypoint pair (OBOKA/TOBAK at 0.78).
+
+_WAYPOINT_SIMILARITY_THRESHOLD = 0.88
+
+# Standard radiotelephony vocabulary. These words occur in ordinary
+# transmissions and must never stand in for a spoken waypoint: the name-code
+# RIDAR is homophonous with "radar", so without this list "radar contact" would
+# satisfy a readback that never named the waypoint at all.
+_RT_STOPWORDS = frozenset("""
+    radar contact identified direct climb climbing descend descending maintain
+    passing initially level flight cleared clear takeoff landing runway squawk
+    ident contact tower ground apron delivery departure arrival approach centre
+    center roger wilco affirm affirmative negative standby request require
+    holding hold short line wait wind altitude heading turn left right speed
+    knots feet thousand hundred decimal information report expect continue
+    proceed vector vectors established intercept final route stand gate taxi
+    push pushback start startup break correction good day morning afternoon
+    evening again say repeat with without ready number behind after before
+    cross crossing traffic mayday pan emergency fuel souls board
+    alpha bravo charlie delta echo foxtrot golf hotel india juliet juliett kilo
+    lima mike november oscar papa quebec romeo sierra tango uniform victor
+    whiskey xray yankee zulu
+    zero one two three four five six seven eight nine niner wun tree fife fower
+""".split())
+
+
+def _value_is_waypoint_name(value: str) -> bool:
+    """A pronounceable five/six-letter ICAO name-code, spoken as a word.
+
+    Mirrors the frontend's TTS rule, which title-cases exactly this shape so it
+    is read aloud as a word rather than spelled — the two must agree, or the
+    matcher would grade something the controller never said that way.
+    """
+    return bool(re.match(r'^[A-Z]{5,6}$', value.strip().upper()))
+
+
+def _waypoint_candidates(utterance: str) -> List[str]:
+    """Spoken words that could carry a waypoint name.
+
+    Adjacent pairs are joined as well, because STT routinely splits a name-code
+    into two English words ("bee backs" for BIBAX). Standard R/T vocabulary is
+    excluded; a pair is only considered when neither half is R/T vocabulary, so
+    "radar contact" never becomes the candidate "radarcontact".
+    """
+    # Single-letter words stay in the list: STT writes ANEKI as "a necky", so
+    # the pair join needs them even though they are never a candidate alone.
+    words = re.findall(r'[a-z]+', utterance.lower())
+    candidates = [w for w in words if len(w) >= 3 and w not in _RT_STOPWORDS]
+    for left, right in zip(words, words[1:]):
+        if left in _RT_STOPWORDS or right in _RT_STOPWORDS:
+            continue
+        candidates.append(left + right)
+    return candidates
+
+
+def _fuzzy_waypoint_match(value: str, utterance: str) -> Optional[str]:
+    """Lenient match for a waypoint spoken as a word. Returns a description."""
+    if not _value_is_waypoint_name(value):
+        return None
+    target = value.strip().lower()
+    target_mp = jellyfish.metaphone(target)
+
+    best_word: Optional[str] = None
+    best_score = 0.0
+    for word in _waypoint_candidates(utterance):
+        score = jellyfish.jaro_winkler_similarity(word, target)
+        if target_mp and jellyfish.metaphone(word) == target_mp:
+            score = max(score, 0.95)
+        if score > best_score:
+            best_word, best_score = word, score
+
+    if best_word is None or best_score < _WAYPOINT_SIMILARITY_THRESHOLD:
+        return None
+    return f'fuzzy_waypoint:{best_word}'
+
+
+# ---------------------------------------------------------------------------
 # Core evaluator
 # ---------------------------------------------------------------------------
 
@@ -454,6 +551,14 @@ def _match_one_value(
         if fuzzy is not None:
             matched = True
             matched_via = fuzzy
+
+    # 4. Fuzzy match for a bare waypoint name-code spoken as a word
+    #    ("BIBAX" transcribed as "Bibaks" / "bee backs").
+    if not matched and expected_str:
+        fuzzy_wp = _fuzzy_waypoint_match(expected_str, utterance)
+        if fuzzy_wp is not None:
+            matched = True
+            matched_via = fuzzy_wp
 
     return matched, matched_via, forms
 
