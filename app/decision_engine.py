@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.pushback import assignable_facing, facing_is_workable, requested_facing
 from app.readback_evaluator import check_readback
+from app.rto import should_reject_takeoff
 from app.session_store import get_session, save_session
 from app.template_renderer import render_template
 from app.trigger_matcher import select_transition
@@ -368,6 +369,25 @@ def _select_pilot_transition(
                 return t, "bad_next_fallback", True
 
     return None, ok_reason, False  # Nothing matched at all
+
+
+def _first_open_ok_next(
+    state: DecisionState, session: RuntimeSession,
+) -> Optional[Transition]:
+    """The first accepted-path transition whose guard currently passes.
+
+    Giving up on a readback has to land where a correct one would have. Taking
+    ok_next[0] blindly ignores guards, so a state whose first branch is
+    conditional — the rejected-takeoff branch off the takeoff readback — would
+    send a pilot who merely could not be understood down a branch that was never
+    meant to fire.
+    """
+    for transition in state.ok_next:
+        if transition.condition is None or evaluate_guard(
+            transition.condition, session.variables, session.flags,
+        ):
+            return transition
+    return None
 
 
 def _apply_transition_actions(
@@ -774,6 +794,27 @@ def process_transmission(
         if passed:
             session.variables.pop(_rb_fail_key, None)
             trace.append(_trace("readback_pass", f"Readback OK — fields present: {current_state.readback_required}"))
+            # A correct takeoff readback is very occasionally answered by Tower
+            # cancelling the takeoff instead of confirming it. Rolled here, on
+            # the accepted path only: a readback that was wrong gets the
+            # correction, not a rejected takeoff. The flow carries the branch.
+            if current_state.rto_eligible:
+                reject = should_reject_takeoff(session.variables, session.flags)
+                session.flags["rto_triggered"] = reject
+                if reject:
+                    # The aircraft is stopping on the runway, so the flow must
+                    # not chain onward to Departure — a rejected takeoff never
+                    # produces a departure handoff or a frequency change.
+                    session.no_chain = True
+                    trace.append(_trace(
+                        "rto", "Tower is cancelling this takeoff clearance",
+                    ))
+                    # Re-select against the now-set flag so the flow's guarded
+                    # RTO branch is the one taken.
+                    selected_transition, match_reason, used_bad_next = _select_pilot_transition(
+                        request.pilot_utterance, current_state,
+                        session.variables, session.flags, trace,
+                    )
         else:
             recognised = ", ".join(
                 f"{r['field']}={r['expected']!r}→{'✓ ' + str(r['matched_via']) if r['matched'] else '✗ missing'}"
@@ -784,8 +825,9 @@ def process_transmission(
             # After too many failed attempts, give up on the readback and advance
             # anyway (e.g. STT can't transcribe a waypoint), so the pilot isn't
             # trapped looping forever.  ATC says it is moving on.
-            if fail_count >= _MAX_READBACK_ATTEMPTS and current_state.ok_next:
-                selected_transition = current_state.ok_next[0]
+            skip_target = _first_open_ok_next(current_state, session)
+            if fail_count >= _MAX_READBACK_ATTEMPTS and skip_target is not None:
+                selected_transition = skip_target
                 skip_readback_notice = True
                 session.variables.pop(_rb_fail_key, None)
                 trace.append(_trace(

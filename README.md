@@ -77,6 +77,12 @@ LOG_LEVEL=info
 # "auto" — dann aus dem ICAO-Code des Flughafens abgeleitet (K/C/P = FAA).
 PHRASEOLOGY_REGION=auto
 
+# Wahrscheinlichkeit, dass Tower in einem normalen Abflug den Start abbricht,
+# statt den Readback zu bestätigen. Bewusst winzig. Pro Session gezielt
+# erzwingbar über die Variable force_rto (true/false) — so wird der Fall im
+# Unterricht geübt und in Tests deterministisch geprüft.
+RTO_PROBABILITY=0.002
+
 # LLM-Router: bei Regex-Miss fragt die Engine das LLM (über den Nuxt-Endpoint
 # /api/decision/route), welcher Kandidat zur — oft STT-verrauschten —
 # Transkription passt, bevor sie auf bad_next zurückfällt.

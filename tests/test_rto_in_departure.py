@@ -1,0 +1,178 @@
+"""A rejected takeoff can happen when you are not expecting one.
+
+Cancelling a takeoff only existed as its own drill, which the pilot starts
+knowing what is coming — the opposite of the situation being practised. An
+ordinary departure now carries a very small chance of Tower cancelling instead
+of confirming the readback.
+
+Nothing here rests on the dice. The probability is only exercised at 0 and 1,
+and every behavioural test drives the branch through the explicit override, so
+these cannot flake.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from app import config, session_store
+from app.decision_engine import process_transmission
+from app.flow_loader import get_flow, load_all_flows
+from app.models import DecisionRequest
+from app.rto import should_reject_takeoff
+from app.session_store import create_session
+
+FLOWS_DIR = Path(__file__).parent.parent / "flows"
+
+GOOD_READBACK = "cleared for takeoff, runway 25L, DLH39A"
+
+
+@pytest.fixture(autouse=True)
+def load_flows():
+    load_all_flows(FLOWS_DIR)
+    session_store._sessions.clear()
+
+
+def _say(resp) -> str:
+    return (resp.controller_say_rendered or "").lower()
+
+
+def _at_takeoff_readback(force_rto=None):
+    overrides = {"callsign": "DLH39A", "runway": "25L"}
+    if force_rto is not None:
+        overrides["force_rto"] = force_rto
+    session = create_session(get_flow("tower"), variable_overrides=overrides)
+    process_transmission(session.session_id, DecisionRequest(
+        pilot_utterance="DLH39A, holding short runway 25L, ready for departure",
+    ))
+    process_transmission(session.session_id, DecisionRequest(
+        pilot_utterance="line up and wait runway 25L, DLH39A",
+    ))
+    stored = session_store.get_session(session.session_id)
+    assert stored.current_state == "PILOT_TAKEOFF_READBACK", stored.current_state
+    return session
+
+
+class TestTheRoll:
+    def test_default_probability_is_tiny(self):
+        assert 0 < config.RTO_PROBABILITY <= 0.01, (
+            f"{config.RTO_PROBABILITY} is far too likely for an unannounced RTO"
+        )
+
+    def test_probability_zero_never_fires(self, monkeypatch):
+        monkeypatch.setattr(config, "RTO_PROBABILITY", 0.0)
+        assert not any(should_reject_takeoff({}, {}) for _ in range(200))
+
+    def test_probability_one_always_fires(self, monkeypatch):
+        monkeypatch.setattr(config, "RTO_PROBABILITY", 1.0)
+        assert all(should_reject_takeoff({}, {}) for _ in range(50))
+
+    def test_an_explicit_override_beats_the_probability(self, monkeypatch):
+        monkeypatch.setattr(config, "RTO_PROBABILITY", 0.0)
+        assert should_reject_takeoff({"force_rto": True}, {})
+        monkeypatch.setattr(config, "RTO_PROBABILITY", 1.0)
+        assert not should_reject_takeoff({"force_rto": False}, {})
+
+    def test_a_takeoff_is_never_rejected_after_liftoff(self, monkeypatch):
+        monkeypatch.setattr(config, "RTO_PROBABILITY", 1.0)
+        assert not should_reject_takeoff({}, {"airborne": True})
+        # Not even when forced: there is no such thing after the wheels are up.
+        assert not should_reject_takeoff({"force_rto": True}, {"airborne": True})
+
+
+class TestTheOrdinaryDeparture:
+    def test_without_the_override_the_departure_proceeds(self, monkeypatch):
+        monkeypatch.setattr(config, "RTO_PROBABILITY", 0.0)
+        session = _at_takeoff_readback()
+        resp = process_transmission(
+            session.session_id, DecisionRequest(pilot_utterance=GOOD_READBACK)
+        )
+        assert resp.next_state_id == "PILOT_AWAIT_AIRBORNE"
+        assert "readback correct" in _say(resp)
+        assert "cancel" not in _say(resp)
+
+
+class TestTheRejectedTakeoff:
+    def test_tower_cancels_with_the_standard_phraseology(self):
+        session = _at_takeoff_readback(force_rto=True)
+        resp = process_transmission(
+            session.session_id, DecisionRequest(pilot_utterance=GOOD_READBACK)
+        )
+        said = _say(resp)
+        assert "cancel take-off" in said, said
+        assert "stop immediately" in said, said
+        # The one call that has to be unmistakable: instruction and callsign
+        # are both repeated.
+        assert said.count("cancel take-off") >= 2, said
+        assert resp.next_state_id == "PILOT_RTO_ACK"
+
+    def test_a_wrong_readback_gets_the_correction_not_a_cancelled_takeoff(self):
+        session = _at_takeoff_readback(force_rto=True)
+        resp = process_transmission(session.session_id, DecisionRequest(
+            pilot_utterance="cleared for takeoff, DLH39A",
+        ))
+        said = _say(resp)
+        assert "cancel" not in said, said
+        assert "say again" in said, said
+        assert resp.next_state_id == "PILOT_TAKEOFF_READBACK"
+
+    def test_the_stop_is_acknowledged_and_the_aircraft_held(self):
+        session = _at_takeoff_readback(force_rto=True)
+        process_transmission(
+            session.session_id, DecisionRequest(pilot_utterance=GOOD_READBACK)
+        )
+        resp = process_transmission(session.session_id, DecisionRequest(
+            pilot_utterance="stopping, DLH39A",
+        ))
+        said = _say(resp)
+        assert "hold position" in said, said
+        assert resp.next_state_id == "TOWER_RTO_COMPLETE"
+        assert resp.session_complete, "the session ends with the aircraft stopped"
+
+    def test_an_unclear_stopping_call_is_chased(self):
+        session = _at_takeoff_readback(force_rto=True)
+        process_transmission(
+            session.session_id, DecisionRequest(pilot_utterance=GOOD_READBACK)
+        )
+        resp = process_transmission(session.session_id, DecisionRequest(
+            pilot_utterance="say again",
+        ))
+        assert resp.next_state_id == "PILOT_RTO_ACK"
+
+    def test_giving_up_on_the_readback_does_not_reject_the_takeoff(self, monkeypatch):
+        """Three unreadable readbacks is a transcription problem, not an RTO.
+
+        Giving up lands where a correct readback would have. Picking the first
+        accepted branch blindly would take the guarded RTO branch instead and
+        cancel the takeoff of a pilot who was merely not understood.
+        """
+        monkeypatch.setattr(config, "RTO_PROBABILITY", 0.0)
+        session = _at_takeoff_readback()
+        for _ in range(3):
+            resp = process_transmission(session.session_id, DecisionRequest(
+                pilot_utterance="cleared for takeoff, DLH39A",
+            ))
+        assert resp.next_state_id == "PILOT_AWAIT_AIRBORNE", resp.next_state_id
+        assert "cancel" not in _say(resp), _say(resp)
+
+    def test_a_rejected_takeoff_never_hands_off_to_departure(self):
+        """The aircraft is stopped on the runway; no frequency change is due."""
+        session = _at_takeoff_readback(force_rto=True)
+        process_transmission(
+            session.session_id, DecisionRequest(pilot_utterance=GOOD_READBACK)
+        )
+        resp = process_transmission(session.session_id, DecisionRequest(
+            pilot_utterance="stopping, DLH39A",
+        ))
+        assert resp.active_flow == "tower-v1", (
+            f"chained on to {resp.active_flow} after a rejected takeoff"
+        )
+        stored = session_store.get_session(session.session_id)
+        assert stored.no_chain, "the departure flow must not follow an RTO"
+
+        # And nothing along the way mentioned a departure frequency.
+        spoken = " ".join(
+            str(entry.get("pilot_utterance", "")) for entry in stored.decision_history
+        )
+        assert "120.8" not in spoken

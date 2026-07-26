@@ -6,6 +6,7 @@ description: "Pilot contacts tower holding short, receives line-up-and-wait then
 start_state: INITIAL_CONTACT
 end_states:
   - TOWER_COMPLETE
+  - TOWER_RTO_COMPLETE
 
 # After takeoff and frequency readback, pilot checks in with departure control.
 next_flow: departure-v1
@@ -40,6 +41,12 @@ flags:
   takeoff_clearance_issued:
     initial: false
   airborne:
+    initial: false
+  # Set by the engine when it decides this departure gets a rejected takeoff,
+  # and read by the guarded branch off the takeoff readback.
+  rto_triggered:
+    initial: false
+  takeoff_cancelled:
     initial: false
 
 states:
@@ -181,7 +188,17 @@ states:
       - runway
     readback_mode: simple
 
+    # Very occasionally Tower cancels instead of confirming. The engine rolls
+    # for it once the readback has been graded correct — see app/rto.py.
+    rto_eligible: true
+
     ok_next:
+      - to: ATC_CANCEL_TAKEOFF
+        trigger: ".*"
+        condition:
+          type: flag_check
+          name: rto_triggered
+        label: "Tower cancels the takeoff clearance"
       - to: ATC_TAKEOFF_READBACK_CORRECT
         trigger: ".*"
         label: "Takeoff readback evaluated — correct"
@@ -191,6 +208,78 @@ states:
         label: "Readback missing runway — controller corrects"
 
     auto_transitions: []
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 6a. Rejected takeoff — Tower cancels the clearance
+  # ─────────────────────────────────────────────────────────────────────────────
+  # ICAO phraseology: the instruction and the callsign are both repeated, since
+  # this is the one call that has to be unmistakable.
+  ATC_CANCEL_TAKEOFF:
+    role: atc
+    phase: tower
+    name: "Tower Cancels Takeoff Clearance"
+    description: "Tower cancels the takeoff clearance and orders an immediate stop"
+    say_template: "{{callsign}}, cancel take-off, I say again, cancel take-off, stop immediately, {{callsign}}, stop immediately"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_RTO_ACK
+        label: "Takeoff cancelled — awaiting the pilot's stopping call"
+        on_enter_actions:
+          - type: set_flag
+            target: takeoff_cancelled
+            value: true
+
+  PILOT_RTO_ACK:
+    role: pilot
+    phase: tower
+    name: "Pilot Acknowledges Rejected Takeoff"
+    description: "Pilot rejects the takeoff and reports stopping"
+    expected_pilot_template: "Stopping, {{callsign}}"
+    frequency_name: "Tower"
+
+    ok_next:
+      - to: ATC_RTO_CONFIRM
+        trigger: "stop|stopping|abort|aborting|reject|rejecting|hold|holding|braking|rto"
+        label: "Pilot acknowledged the stop"
+
+    bad_next:
+      - to: ATC_RTO_REPROMPT
+        label: "No clear stopping call — controller repeats the stop instruction"
+
+    auto_transitions: []
+
+  ATC_RTO_REPROMPT:
+    role: atc
+    phase: tower
+    name: "Tower Repeats the Stop Instruction"
+    description: "Controller repeats the immediate-stop instruction"
+    say_template: "{{callsign}}, stop immediately, acknowledge"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_RTO_ACK
+        label: "Stop repeated — pilot to acknowledge"
+
+  # The aircraft stays with Tower on the runway: a rejected takeoff never hands
+  # the pilot to Departure, and the departure frequency is not mentioned.
+  ATC_RTO_CONFIRM:
+    role: atc
+    phase: tower
+    name: "Tower Confirms the Stop"
+    description: "Tower acknowledges the rejected takeoff and holds the aircraft on the runway"
+    say_template: "{{callsign}}, roger, hold position, advise when ready to vacate"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: TOWER_RTO_COMPLETE
+        label: "Rejected takeoff handled — session ends with the aircraft stopped"
 
   # No instruction follows a takeoff clearance readback, so the confirmation is
   # what tells the pilot the clearance was correctly acknowledged. Without it
@@ -367,6 +456,19 @@ states:
     phase: tower
     name: "Tower Phase Complete"
     description: "Takeoff and departure handoff complete. Switch to departure on {{departure_freq}}."
+
+    ok_next: []
+    bad_next: []
+    auto_transitions: []
+
+  # Separate end state so the session does not read as a completed departure.
+  # The engine also sets no_chain when the takeoff is cancelled, so the flow
+  # never chains on to Departure — the aircraft is stopped on the runway.
+  TOWER_RTO_COMPLETE:
+    role: system
+    phase: tower
+    name: "Rejected Take-Off Complete"
+    description: "Takeoff was rejected. The aircraft is holding on runway {{runway}}, still with Tower."
 
     ok_next: []
     bad_next: []

@@ -136,6 +136,12 @@ class DecisionState(BaseModel):
     # Emergency state marker (informational; routing uses Transition.is_emergency)
     is_emergency: bool = False
 
+    # A correct readback at this state may, very rarely, be answered by Tower
+    # cancelling the takeoff instead of confirming it. Set on the takeoff
+    # clearance readback; the engine rolls for it (see app/rto.py) and the flow
+    # carries the guarded branch. Never fires once the aircraft is airborne.
+    rto_eligible: bool = False
+
 
 class VariableDefinition(BaseModel):
     """Definition of a runtime variable."""
