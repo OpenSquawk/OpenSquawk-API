@@ -215,6 +215,10 @@ class RuntimeSession(BaseModel):
     message_history: List[Dict] = Field(default_factory=list)
     decision_history: List[Dict] = Field(default_factory=list)
 
+    # Last controller say_template sent to the pilot, kept unrendered so a
+    # "say again" repeats it with the variable values current at that moment.
+    last_controller_say: Optional[str] = None
+
     active_timers: List[Dict] = Field(default_factory=list)
 
     # Latest normalised telemetry scalars from the sim bridge (empty when flying

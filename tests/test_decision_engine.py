@@ -2,9 +2,13 @@
 
 The clearance flow (clearance-v1.yaml) models ICAO IFR clearance delivery:
   INITIAL_CALL → ATC_ISSUES_CLEARANCE (auto) → PILOT_READBACK
-               → ATC_READBACK_CORRECT (auto) → CLEARANCE_COMPLETE
+               → ATC_READBACK_CORRECT (auto) → PILOT_GROUND_FREQ_READBACK
+               → ATC_CLEARANCE_HANDOFF_CONFIRMED (auto) → CLEARANCE_COMPLETE
                ↓ next_flow chain
   REQUEST_STARTUP (taxi-v1)
+
+The pilot reads the ground frequency back before the handoff, the way real
+phraseology requires — see tests/test_frequency_handoff.py.
 
 Trigger for INITIAL_CALL ok_next: "information|request.*clear|IFR|clearance|stand"
 Readback required at PILOT_READBACK: squawk (2341) and initial_altitude (5000).
@@ -28,6 +32,7 @@ FLOWS_DIR = __import__("pathlib").Path(__file__).parent.parent / "flows"
 GOOD_INITIAL_CALL = "request clearance"          # matches "clearance" in trigger
 GOOD_READBACK = "cleared Munich BIBAX1N departure climb 5000 squawk 2341 DLH39A"
 BAD_READBACK = "acknowledged"                    # missing squawk and initial_altitude
+GOOD_FREQ_READBACK = "121.800, DLH39A"           # ground_freq readback before the handoff
 
 
 @pytest.fixture(autouse=True)
@@ -66,8 +71,8 @@ class TestDecisionEngine:
         resp = process_transmission(clearance_session.session_id, req)
         assert "regex_match" in [t.type for t in resp.trace]
 
-    def test_correct_readback_chains_to_taxi_flow(self, clearance_session):
-        """Completing the clearance readback chains to taxi-v1 via next_flow."""
+    def test_correct_readback_awaits_the_frequency_readback(self, clearance_session):
+        """The handoff is not complete until the pilot reads the frequency back."""
         process_transmission(
             clearance_session.session_id,
             DecisionRequest(pilot_utterance=GOOD_INITIAL_CALL),
@@ -76,13 +81,33 @@ class TestDecisionEngine:
             clearance_session.session_id,
             DecisionRequest(pilot_utterance=GOOD_READBACK),
         )
+        assert resp.next_state_id == "PILOT_GROUND_FREQ_READBACK"
+        assert resp.active_flow == "clearance-v1"
+        # The controller has already passed the ground frequency.
+        assert "ground" in (resp.controller_say_rendered or "").lower()
+
+    def test_correct_readback_chains_to_taxi_flow(self, clearance_session):
+        """Reading the ground frequency back chains to taxi-v1 via next_flow."""
+        process_transmission(
+            clearance_session.session_id,
+            DecisionRequest(pilot_utterance=GOOD_INITIAL_CALL),
+        )
+        process_transmission(
+            clearance_session.session_id,
+            DecisionRequest(pilot_utterance=GOOD_READBACK),
+        )
+        resp = process_transmission(
+            clearance_session.session_id,
+            DecisionRequest(pilot_utterance=GOOD_FREQ_READBACK),
+        )
         # next_flow=taxi-v1 → engine chains past CLEARANCE_COMPLETE to REQUEST_STARTUP
         assert resp.next_state_id == "REQUEST_STARTUP"
         assert resp.active_flow == "taxi-v1"
         assert resp.fallback_used is False
-        # ATC speech is still from clearance (the last controller message)
+        # ATC speech is still from clearance (the last controller message —
+        # delivery releasing the pilot after the frequency readback)
         assert resp.controller_say_rendered is not None
-        assert "ground" in (resp.controller_say_rendered or "").lower()
+        assert "good day" in (resp.controller_say_rendered or "").lower()
         # Expected pilot template is now the taxi startup request
         assert resp.expected_pilot_template is not None
         assert "startup" in (resp.expected_pilot_template or "").lower()
@@ -177,9 +202,13 @@ class TestDecisionEngine:
             clearance_session.session_id,
             DecisionRequest(pilot_utterance=GOOD_INITIAL_CALL),
         )
-        resp = process_transmission(
+        process_transmission(
             clearance_session.session_id,
             DecisionRequest(pilot_utterance=GOOD_READBACK),
+        )
+        resp = process_transmission(
+            clearance_session.session_id,
+            DecisionRequest(pilot_utterance=GOOD_FREQ_READBACK),
         )
         # After chaining to taxi-v1, callsign and stand must still be correct
         assert resp.variables.get("callsign") == "DLH39A"
@@ -349,7 +378,9 @@ class TestIcaoDigitVariants:
             {"qnh": "1013", "pushback_direction": "west"},
         )
         assert ok and missing == []
-        assert rep[0]["matched_via"] == "digit_phonetic"
+        # ICAO variants (wun, tree, fife) are covered by the spoken-form match
+        # itself now, so this no longer has to reach the digit-by-digit fallback.
+        assert rep[0]["matched"] is True
 
     def test_squawk_with_icao_digit_variants(self):
         from app.readback_evaluator import evaluate_readback_simple
@@ -370,7 +401,9 @@ class TestIcaoDigitVariants:
             ["departure_freq"], {"departure_freq": "125.350"},
         )
         assert ok and missing == []
-        assert rep[0]["matched_via"] == "digit_phonetic"
+        # ICAO variants (wun, tree, fife) are covered by the spoken-form match
+        # itself now, so this no longer has to reach the digit-by-digit fallback.
+        assert rep[0]["matched"] is True
 
     def test_frequency_wrong_digit_rejected(self):
         from app.readback_evaluator import evaluate_readback_simple
@@ -709,7 +742,10 @@ def test_3x_skip_to_pilot_state_never_crashes(flow_slug, state_id, expected_targ
         session.variables[field] = "ZZUNMATCHABLE"
     save_session(session)
 
-    wrong = DecisionRequest(pilot_utterance="say again please now")
+    # Meaningless on purpose. Must not be standard phraseology: "say again"
+    # is intercepted globally and repeats the transmission instead of grading
+    # as a wrong readback.
+    wrong = DecisionRequest(pilot_utterance="mumble mumble static")
     resp = None
     for _ in range(_MAX_READBACK_ATTEMPTS):
         # Pin the cursor to the readback state before each attempt so the test

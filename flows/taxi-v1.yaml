@@ -473,6 +473,60 @@ states:
     ok_next: []
     bad_next: []
     auto_transitions:
+      - to: PILOT_TOWER_FREQ_READBACK
+        label: "Taxi confirmed and tower frequency passed — awaiting frequency readback"
+
+  PILOT_TOWER_FREQ_READBACK:
+    role: pilot
+    phase: taxi
+    name: "Pilot Reads Back Tower Frequency"
+    description: "Pilot reads back the tower frequency and own callsign to confirm the frequency change"
+    expected_pilot_template: "{{tower_freq}}, {{callsign}}"
+    frequency: "121.800"
+    frequency_name: "Ground"
+
+    readback_required:
+      - tower_freq
+    readback_mode: simple
+
+    ok_next:
+      - to: ATC_TAXI_HANDOFF_CONFIRMED
+        trigger: ".*"
+        label: "Tower frequency readback evaluated — correct"
+
+    bad_next:
+      - to: ATC_TOWER_FREQ_READBACK_INCORRECT
+        label: "Readback missing the tower frequency — controller corrects"
+
+    auto_transitions: []
+
+  ATC_TOWER_FREQ_READBACK_INCORRECT:
+    role: atc
+    phase: taxi
+    name: "Ground Corrects Tower Frequency Readback"
+    description: "Ground repeats the tower frequency for the pilot"
+    say_template: "Negative, {{callsign}}, tower on {{tower_freq}}"
+    frequency: "121.800"
+    frequency_name: "Ground"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_TOWER_FREQ_READBACK
+        label: "Correction given — pilot to try again"
+
+  ATC_TAXI_HANDOFF_CONFIRMED:
+    role: atc
+    phase: taxi
+    name: "Ground Releases the Pilot to Tower"
+    description: "Ground acknowledges the correct frequency readback and releases the pilot"
+    say_template: "{{callsign}}, good day"
+    frequency: "121.800"
+    frequency_name: "Ground"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
       - to: TAXI_COMPLETE
         label: "Taxi phase complete"
 

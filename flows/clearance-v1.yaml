@@ -157,12 +157,64 @@ states:
     ok_next: []
     bad_next: []
     auto_transitions:
-      - to: CLEARANCE_COMPLETE
-        label: "Clearance phase complete"
+      - to: PILOT_GROUND_FREQ_READBACK
+        label: "Clearance confirmed and ground frequency passed — awaiting frequency readback"
         on_enter_actions:
           - type: set_flag
             target: readback_correct
             value: true
+
+  PILOT_GROUND_FREQ_READBACK:
+    role: pilot
+    phase: clearance
+    name: "Pilot Reads Back Ground Frequency"
+    description: "Pilot reads back the ground frequency and own callsign to confirm the frequency change"
+    expected_pilot_template: "{{ground_freq}}, {{callsign}}"
+    frequency_name: "Clearance Delivery"
+
+    readback_required:
+      - ground_freq
+    readback_mode: simple
+
+    ok_next:
+      - to: ATC_CLEARANCE_HANDOFF_CONFIRMED
+        trigger: ".*"
+        label: "Ground frequency readback evaluated — correct"
+
+    bad_next:
+      - to: ATC_GROUND_FREQ_READBACK_INCORRECT
+        label: "Readback missing the ground frequency — controller corrects"
+
+    auto_transitions: []
+
+  ATC_GROUND_FREQ_READBACK_INCORRECT:
+    role: atc
+    phase: clearance
+    name: "ATC Corrects Ground Frequency Readback"
+    description: "Controller repeats the ground frequency for the pilot"
+    say_template: "Negative, {{callsign}}, ground on {{ground_freq}}"
+    frequency_name: "Clearance Delivery"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_GROUND_FREQ_READBACK
+        label: "Correction given — pilot to try again"
+
+  ATC_CLEARANCE_HANDOFF_CONFIRMED:
+    role: atc
+    phase: clearance
+    name: "Delivery Releases the Pilot to Ground"
+    description: "Delivery acknowledges the correct frequency readback and releases the pilot"
+    say_template: "{{callsign}}, good day"
+    frequency_name: "Clearance Delivery"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: CLEARANCE_COMPLETE
+        label: "Clearance phase complete"
+        on_enter_actions:
           - type: log
             target: clearance_complete
 

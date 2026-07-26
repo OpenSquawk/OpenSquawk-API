@@ -84,6 +84,26 @@ _GREETING_RE = re.compile(
 )
 _GREETING_REPLY = "{{callsign}}, pass your message"
 
+
+# ---------------------------------------------------------------------------
+# Global "say again" intercept
+# ---------------------------------------------------------------------------
+# Standard phraseology for "I did not receive that" — valid at any point in a
+# flow, so unlike the greeting this is not restricted to initial-contact states.
+# The controller simply repeats the last transmission and the session stays put.
+# "Say again all after …" is accepted as a plain repeat: the partial-repeat
+# variants would need to segment the previous transmission, which buys little
+# over hearing the whole thing again.
+
+_SAY_AGAIN_RE = re.compile(
+    r"\bsay\s+again\b"
+    r"|\brepeat\b"
+    r"|\bcome\s+again\b"
+    r"|\bonce\s+more\b"
+    r"|\bnochmal\b|\bwiederholen\b|\bwiederhole\b",
+    re.IGNORECASE,
+)
+
 # Stop looping a readback the pilot can't get right (e.g. STT cannot transcribe a
 # waypoint); after this many failed attempts ATC gives up and moves on.
 _MAX_READBACK_ATTEMPTS = 3
@@ -92,6 +112,37 @@ _READBACK_SKIP_NOTICE = "{{callsign}}, readback not correct, continuing for now.
 
 def _is_greeting(utterance: str) -> bool:
     return bool(_GREETING_RE.search(utterance))
+
+
+def _is_say_again(utterance: str) -> bool:
+    return bool(_SAY_AGAIN_RE.search(utterance))
+
+
+# Triggers that match anything carry no evidence that the pilot said the thing
+# the state is waiting for — readback states use ".*" and let the readback
+# evaluator do the grading. A global intercept must not treat them as a match.
+_CATCH_ALL_TRIGGERS = {".*", ".+", "^.*$", "^.+$"}
+
+
+def _matches_specific_trigger(
+    utterance: str, state: DecisionState, variables: Dict[str, Any], flags: Dict[str, bool],
+) -> bool:
+    """True when the utterance matches an ok_next trigger that is not a catch-all."""
+    specific = [t for t in state.ok_next if (t.trigger or "").strip() not in _CATCH_ALL_TRIGGERS]
+    if not specific:
+        return False
+    transition, _ = select_transition(utterance, specific, variables, flags)
+    return transition is not None
+
+
+def _remember_controller_say(session: RuntimeSession, say_template: Optional[str]) -> None:
+    """Keep the last controller transmission so "say again" can repeat it.
+
+    Stored unrendered: a repeat should quote the values as they are now, and
+    the template is what the flow author wrote.
+    """
+    if say_template:
+        session.last_controller_say = say_template
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +343,7 @@ def _build_stay_response(
         "match_reason": match_reason,
         "fallback_used": False,
     })
+    _remember_controller_say(session, say_template)
     save_session(session)
 
     return DecisionResponse(
@@ -439,6 +491,34 @@ def process_transmission(
             session, current_state, _DISTRESS_ENDED_REPLY,
             request.pilot_utterance, "emergency_cancel", trace,
         )
+
+    # --- Step 5b2: Global "say again" intercept ---
+    # Repeat the last controller transmission and stay put. Guarded by an
+    # ok_next check so a readback that happens to contain "repeat" is still
+    # graded as a readback. Without a previous transmission there is nothing to
+    # repeat, so the utterance falls through to normal matching.
+    if (
+        selected_transition is None
+        and session.last_controller_say
+        and _is_say_again(request.pilot_utterance)
+    ):
+        if not _matches_specific_trigger(
+            request.pilot_utterance, current_state, session.variables, session.flags,
+        ):
+            trace.append(_trace(
+                "say_again",
+                f"Pilot requested a repeat at '{current_state.id}' — resending last transmission",
+            ))
+            _log_result(
+                session_id=session_id, state_in=current_state.id,
+                state_out=current_state.id, match_reason="say_again",
+                auto_advanced=[], fallback_used=False, fallback_reason=None,
+                say_template=session.last_controller_say, trace=trace,
+            )
+            return _build_stay_response(
+                session, current_state, session.last_controller_say,
+                request.pilot_utterance, "say_again", trace,
+            )
 
     # --- Step 5c: Global greeting intercept (optional courtesy call) ---
     # Only at initial-contact states, and only when the utterance does NOT also
@@ -714,6 +794,7 @@ def process_transmission(
         "match_reason": match_reason,
         "fallback_used": fallback_used,
     })
+    _remember_controller_say(session, say_template)
     save_session(session)
 
     _log_result(
@@ -891,6 +972,7 @@ def process_timeout(session_id: str) -> DecisionResponse:
         "match_reason": "silence_timeout",
         "fallback_used": False,
     })
+    _remember_controller_say(session, say_template)
     save_session(session)
 
     return DecisionResponse(
@@ -1165,6 +1247,7 @@ def _finalize_transition(
         "match_reason": match_reason,
         "fallback_used": False,
     })
+    _remember_controller_say(session, say_template)
     save_session(session)
 
     return DecisionResponse(

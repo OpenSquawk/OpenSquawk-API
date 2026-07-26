@@ -79,6 +79,28 @@ _ANY_DIGIT_WORD = (
 # Spoken-form generators
 # ---------------------------------------------------------------------------
 
+# Speech-to-text punctuates freely inside spoken numbers — "one-hundred",
+# "two, five, left", "one—hundred". Any of these may separate two words of a
+# spoken form, and so may nothing at all.
+_WORD_SEP = r'[\s,.\-–—]*'
+
+_WORD_TO_DIGIT: Dict[str, str] = {word: str(i) for i, word in enumerate(_DIGIT_WORDS)}
+
+
+def _tolerant_form_regex(form: str) -> str:
+    """Regex for a spoken form that tolerates STT punctuation and ICAO variants.
+
+    'flight level one hundred' also matches "flight level one-hundred" and
+    "flight level wun hundred". Anchored on word boundaries so a form never
+    matches half of a longer number ("one zero zero" inside "1003").
+    """
+    parts = []
+    for token in form.split():
+        digit = _WORD_TO_DIGIT.get(token.lower())
+        parts.append(_DIGIT_PHONETICS[digit] if digit else re.escape(token))
+    return r'(?<!\w)' + _WORD_SEP.join(parts) + r'(?!\w)'
+
+
 def _icao_digits(value: str) -> str:
     """Spell each digit individually: '2118' → 'two one one eight'."""
     return ' '.join(_DIGIT_WORDS[int(c)] for c in value if c.isdigit())
@@ -329,7 +351,7 @@ def _match_readback_value(
 
     # 1. Check literal value and all static spoken forms
     for form in forms:
-        if form and re.search(re.escape(form), utterance, re.IGNORECASE):
+        if form and re.search(_tolerant_form_regex(form), utterance, re.IGNORECASE):
             matched = True
             matched_via = form
             break
@@ -341,6 +363,14 @@ def _match_readback_value(
     #     (the separator optionally swallows a spoken "decimal"/"point").
     if not matched and expected_str:
         digits_only = re.sub(r'\D', '', expected_str)
+        # A parallel runway is only read back correctly with its side. Without
+        # this guard the digit fallback drops the L/C/R and "two five right"
+        # would satisfy an expected 25L.
+        runway_side = re.match(r'^\d{2}([LCR])$', expected_str, re.IGNORECASE)
+        side_suffix = ''
+        if runway_side:
+            side_word = {'L': 'left', 'R': 'right', 'C': '(?:center|centre)'}[runway_side.group(1).upper()]
+            side_suffix = rf'{_DIGIT_SEQ_SEP}(?:{runway_side.group(1)}|{side_word})'
         # Frequencies are routinely read without the trailing zero: "125.35"
         # for 125.350, "118.7" for 118.700.  Accept the value with trailing
         # zeros of the decimal dropped, keeping at least the 3-digit MHz part.
@@ -353,7 +383,7 @@ def _match_readback_value(
                 digit_candidates.append((trimmed, True))
         for cand, must_end in digit_candidates:
             if len(cand) >= 2:
-                seq = _DIGIT_SEQ_SEP.join(_DIGIT_PHONETICS[d] for d in cand)
+                seq = _DIGIT_SEQ_SEP.join(_DIGIT_PHONETICS[d] for d in cand) + side_suffix
                 if must_end:
                     seq += rf'(?!{_DIGIT_SEQ_SEP}{_ANY_DIGIT_WORD})'
                 if re.search(seq, utterance, re.IGNORECASE):
