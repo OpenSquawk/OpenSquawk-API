@@ -424,7 +424,7 @@ class TestReadbackReport:
         process_transmission(clearance_session.session_id, DecisionRequest(pilot_utterance=GOOD_INITIAL_CALL))
         resp = process_transmission(clearance_session.session_id, DecisionRequest(pilot_utterance=GOOD_READBACK))
         fields = {r.field: r for r in resp.readback_report}
-        assert set(fields) == {"sid", "squawk", "initial_altitude"}
+        assert set(fields) == {"destination", "sid", "squawk", "initial_altitude"}
         assert all(r.matched for r in resp.readback_report)
         # The matched form is reported so the log can show what was recognised.
         assert fields["squawk"].matched_via is not None

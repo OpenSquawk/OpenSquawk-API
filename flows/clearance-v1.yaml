@@ -114,10 +114,14 @@ states:
     expected_pilot_template: "Cleared {{destination}}, {{sid}}, climb initially {{initial_altitude}}, squawk {{squawk}}, {{callsign}}"
     frequency_name: "Clearance Delivery"
 
+    # The clearance limit is as safety-critical as the rest: a pilot who reads
+    # back the wrong destination has misheard the clearance, even when SID,
+    # level and squawk are verbatim correct.
     readback_required:
+      - destination
       - sid
-      - squawk
       - initial_altitude
+      - squawk
     readback_mode: simple
 
     ok_next:

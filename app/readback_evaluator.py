@@ -223,6 +223,30 @@ def spoken_forms(value: str) -> List[str]:
     return [f for f in forms if f]
 
 
+# A place-shaped value: letters, spaces and the punctuation that occurs in
+# airport city names ("Frankfurt am Main", "'s-Hertogenbosch"). Digits exclude
+# squawks, altitudes and frequencies, so those never hit the airport dataset.
+_PLACE_SHAPED = re.compile(r"^[^\W\d_][^\W\d_ .\-']*(?:[ .\-'][^\W\d_][^\W\d_ .\-']*)*$")
+
+
+def place_aliases(value: str) -> List[str]:
+    """Accepted alternative spoken values for a place-valued field.
+
+    An airport is read back by ICAO code or by city name, in English or German
+    — all of them correct. The aliases come from the bundled airport dataset,
+    so this holds for every airport rather than a hardcoded handful. A value
+    that is not place-shaped (a squawk, a level) never reaches the dataset.
+    """
+    v = value.strip()
+    if not v or not _PLACE_SHAPED.match(v):
+        return []
+    try:
+        from app.airport_data import spoken_place_aliases
+        return [a for a in spoken_place_aliases(v) if a.strip().lower() != v.lower()]
+    except Exception:  # dataset missing/unreadable — fall back to literal only
+        return []
+
+
 def _value_is_icao_ident(value: str) -> bool:
     """
     True when the value looks like a multi-character ICAO alphanumeric
@@ -340,11 +364,33 @@ def _match_readback_value(
     expected_str: str,
     utterance: str,
 ) -> Tuple[bool, Optional[str], List[str]]:
-    """Match a single expected value against the utterance.
+    """Match an expected value — or any equivalent name for it — in the utterance.
 
     Returns ``(matched, matched_via, accepted_forms)``. Shared by scalar and
     list-valued readback fields so they grade identically.
+
+    Place-valued fields (destination, alternate) accept the ICAO code and the
+    city name in either language, because all of those are a correct readback of
+    the same airport.
     """
+    matched, matched_via, forms = _match_one_value(expected_str, utterance)
+    if matched or not expected_str:
+        return matched, matched_via, forms
+
+    for alias in place_aliases(expected_str):
+        alias_matched, alias_via, alias_forms = _match_one_value(alias, utterance)
+        forms = forms + alias_forms
+        if alias_matched:
+            return True, f"place_alias:{alias} ({alias_via})", forms
+
+    return False, None, forms
+
+
+def _match_one_value(
+    expected_str: str,
+    utterance: str,
+) -> Tuple[bool, Optional[str], List[str]]:
+    """Match one literal expected value against the utterance."""
     forms = spoken_forms(expected_str) if expected_str else []
     matched = False
     matched_via: Optional[str] = None
