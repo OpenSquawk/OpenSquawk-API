@@ -51,10 +51,6 @@ variables:
     type: string
     initial: "121.800"
     mutable_by: action_only
-  parking_instruction:
-    type: string
-    initial: "the apron via taxiway Alpha"
-    mutable_by: action_only
 
 flags:
   circuit_info_given:
@@ -382,16 +378,20 @@ states:
   ATC_VACATED_RESPONSE:
     role: atc
     phase: circuit
-    name: "Tower Acknowledges Vacated and Issues Taxi-In"
-    description: "Tower confirms runway vacated, gives initial taxi-in destination, and hands off to Ground"
-    say_template: "{{callsign_short}}, taxi to {{parking_instruction}}, contact ground {{ground_freq}}"
+    name: "Tower Acknowledges Vacated and Hands Off to Ground"
+    description: >-
+      Tower confirms the runway is vacated and hands the pilot to Ground.
+      Tower does NOT taxi the aircraft: this flow chains into taxi-in-v1, where
+      Ground issues the taxi clearance. Saying it here too taxied the pilot
+      twice, from two different controllers.
+    say_template: "{{callsign_short}}, roger, contact ground {{ground_freq}}"
     frequency_name: "Tower"
 
     ok_next: []
     bad_next: []
     auto_transitions:
       - to: PILOT_VACATED_READBACK
-        label: "Vacated response and taxi instruction issued — await pilot readback"
+        label: "Vacated acknowledged and handed off — await pilot readback"
         on_enter_actions:
           - type: set_flag
             target: runway_vacated
@@ -403,9 +403,9 @@ states:
   PILOT_VACATED_READBACK:
     role: pilot
     phase: circuit
-    name: "Pilot Reads Back Taxi-In and Ground Frequency"
-    description: "Pilot reads back taxi destination and ground frequency to confirm handoff"
-    expected_pilot_template: "Taxi to {{parking_instruction}}, {{ground_freq}}, {{callsign}}"
+    name: "Pilot Reads Back Ground Frequency"
+    description: "Pilot reads back the ground frequency to confirm the handoff"
+    expected_pilot_template: "{{ground_freq}}, {{callsign}}"
     frequency_name: "Tower"
 
     readback_required:
@@ -415,7 +415,7 @@ states:
     ok_next:
       - to: ATC_VACATED_CONFIRMED
         trigger: ".*"
-        label: "Taxi-in readback evaluated — correct"
+        label: "Ground frequency readback evaluated — correct"
 
     bad_next:
       - to: ATC_VACATED_READBACK_INCORRECT
