@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.action_executor import execute_actions
 from app.airport_data import airport_coords
+from app.airspace import center_frequency_at
 from app.auto_advance import advance_through_non_pilot
 from app.flow_loader import get_flow
 from app.flow_orchestrator import handle_flow_completion, push_flow
@@ -1420,6 +1421,30 @@ def _derived_position(session: RuntimeSession) -> Dict[str, float]:
     return out
 
 
+def _update_sector(session: RuntimeSession) -> None:
+    """Track which control sector the aircraft is in, and its frequency.
+
+    Enroute the frequency follows the airspace, not the departure airport. The
+    boundaries are vendored, so this needs no network and does not care whether
+    anyone is controlling the sector on the live network.
+    """
+    position = _session_position(session)
+    if position is None:
+        return
+    resolved = center_frequency_at(position[0], position[1])
+    if resolved is None:
+        return
+    sector_id, frequency = resolved
+    if session.variables.get("sector_id") == sector_id:
+        return
+    session.variables["sector_id"] = sector_id
+    session.variables["sector_freq"] = frequency
+    logger.info(
+        "[session=%.8s] entered sector %s — center %s",
+        session.session_id, sector_id, frequency,
+    )
+
+
 def _no_op_telemetry_response(session: RuntimeSession, trace: List[TransitionTrace]) -> DecisionResponse:
     """A telemetry tick that fired nothing — state and speech unchanged."""
     return DecisionResponse(
@@ -1595,6 +1620,7 @@ def process_telemetry(session_id: str, telemetry: Dict[str, Any]) -> DecisionRes
         if value is not None:
             session.telemetry[key] = value
     _update_derived_distances(session)
+    _update_sector(session)
 
     flow = get_flow(session.active_flow)
     current_state = _get_state(flow, session.current_state)
