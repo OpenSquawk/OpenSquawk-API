@@ -14,6 +14,7 @@ from app import config
 
 
 SHIPPED_RTO_PROBABILITY = config.RTO_PROBABILITY
+SHIPPED_GO_AROUND_PROBABILITY = config.GO_AROUND_PROBABILITY
 
 
 @pytest.fixture
@@ -22,20 +23,26 @@ def shipped_rto_probability() -> float:
     return SHIPPED_RTO_PROBABILITY
 
 
+@pytest.fixture
+def shipped_go_around_probability() -> float:
+    return SHIPPED_GO_AROUND_PROBABILITY
+
+
 @pytest.fixture(autouse=True)
-def _no_random_rejected_takeoffs():
-    """Take the rejected-takeoff dice out of the suite.
+def _no_random_interventions():
+    """Take the intervention dice out of the suite.
 
     An ordinary departure carries a small chance of Tower cancelling the
-    takeoff. Left enabled, that fires in maybe one run in a few hundred and
-    breaks whichever test happened to be driving a departure at the time — a
-    flake that looks like a real failure. Tests that care set the probability
-    themselves or use the force_rto override.
+    takeoff, and an ordinary approach of being sent around. Left enabled, those
+    fire in maybe one run in a few hundred and break whichever test happened to
+    be flying at the time — a flake that looks like a real failure. Tests that
+    care set the probability themselves or use the force_* overrides.
     """
-    original = config.RTO_PROBABILITY
+    original = (config.RTO_PROBABILITY, config.GO_AROUND_PROBABILITY)
     config.RTO_PROBABILITY = 0.0
+    config.GO_AROUND_PROBABILITY = 0.0
     yield
-    config.RTO_PROBABILITY = original
+    config.RTO_PROBABILITY, config.GO_AROUND_PROBABILITY = original
 
 from app.models import (
     Action,

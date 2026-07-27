@@ -33,7 +33,7 @@ from app.models import (
 )
 from app.pushback import assignable_facing, facing_is_workable, requested_facing
 from app.readback_evaluator import check_readback
-from app.rto import should_reject_takeoff
+from app.interventions import should_go_around, should_reject_takeoff
 from app.session_store import get_session, save_session
 from app.template_renderer import render_template
 from app.trigger_matcher import select_transition
@@ -804,10 +804,11 @@ def process_transmission(
         if passed:
             session.variables.pop(_rb_fail_key, None)
             trace.append(_trace("readback_pass", f"Readback OK — fields present: {current_state.readback_required}"))
-            # A correct takeoff readback is very occasionally answered by Tower
-            # cancelling the takeoff instead of confirming it. Rolled here, on
-            # the accepted path only: a readback that was wrong gets the
-            # correction, not a rejected takeoff. The flow carries the branch.
+            # A correct takeoff or landing readback is very occasionally answered
+            # by Tower intervening instead of confirming. Rolled here, on the
+            # accepted path only: a readback that was wrong gets the correction,
+            # not an intervention. The flow carries the guarded branch.
+            intervened = False
             if current_state.rto_eligible:
                 reject = should_reject_takeoff(session.variables, session.flags)
                 session.flags["rto_triggered"] = reject
@@ -816,15 +817,28 @@ def process_transmission(
                     # not chain onward to Departure — a rejected takeoff never
                     # produces a departure handoff or a frequency change.
                     session.no_chain = True
+                    intervened = True
                     trace.append(_trace(
                         "rto", "Tower is cancelling this takeoff clearance",
                     ))
-                    # Re-select against the now-set flag so the flow's guarded
-                    # RTO branch is the one taken.
-                    selected_transition, match_reason, used_bad_next = _select_pilot_transition(
-                        request.pilot_utterance, current_state,
-                        session.variables, session.flags, trace,
-                    )
+            if current_state.go_around_eligible:
+                around = should_go_around(session.variables, session.flags)
+                session.flags["go_around_triggered"] = around
+                if around:
+                    # The aircraft is flying another approach, not taxiing in,
+                    # so the flow must not chain onward to the taxi-in flow.
+                    session.no_chain = True
+                    intervened = True
+                    trace.append(_trace(
+                        "go_around", "Tower is sending this approach around",
+                    ))
+            if intervened:
+                # Re-select against the now-set flag so the flow's guarded
+                # branch is the one taken.
+                selected_transition, match_reason, used_bad_next = _select_pilot_transition(
+                    request.pilot_utterance, current_state,
+                    session.variables, session.flags, trace,
+                )
         else:
             recognised = ", ".join(
                 f"{r['field']}={r['expected']!r}→{'✓ ' + str(r['matched_via']) if r['matched'] else '✗ missing'}"

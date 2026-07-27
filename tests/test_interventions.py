@@ -20,7 +20,7 @@ from app import config, session_store
 from app.decision_engine import process_transmission
 from app.flow_loader import get_flow, load_all_flows
 from app.models import DecisionRequest
-from app.rto import should_reject_takeoff
+from app.interventions import should_go_around, should_reject_takeoff
 from app.session_store import create_session
 
 FLOWS_DIR = Path(__file__).parent.parent / "flows"
@@ -178,3 +178,101 @@ class TestTheRejectedTakeoff:
             str(entry.get("pilot_utterance", "")) for entry in stored.decision_history
         )
         assert "120.8" not in spoken
+
+
+# ---------------------------------------------------------------------------
+# Go-around — Tower breaks off an approach
+# ---------------------------------------------------------------------------
+
+GOOD_LANDING_READBACK = "cleared to land runway 26L, DLH6RK"
+
+
+def _at_landing_readback(force_go_around=None):
+    overrides = {"callsign": "DLH6RK", "runway": "26L",
+                 "approach_freq": "119.000", "go_around_altitude": "3000"}
+    if force_go_around is not None:
+        overrides["force_go_around"] = force_go_around
+    session = create_session(get_flow("ifr-tower-landing"), variable_overrides=overrides)
+    process_transmission(session.session_id, DecisionRequest(
+        pilot_utterance="DLH6RK, established ILS runway 26L",
+    ))
+    stored = session_store.get_session(session.session_id)
+    assert stored.current_state == "PILOT_LANDING_READBACK", stored.current_state
+    return session
+
+
+class TestTheGoAroundRoll:
+    def test_default_probability_is_tiny(self, shipped_go_around_probability):
+        assert 0 < shipped_go_around_probability <= 0.01
+
+    def test_an_explicit_override_beats_the_probability(self, monkeypatch):
+        monkeypatch.setattr(config, "GO_AROUND_PROBABILITY", 0.0)
+        assert should_go_around({"force_go_around": True}, {})
+        monkeypatch.setattr(config, "GO_AROUND_PROBABILITY", 1.0)
+        assert not should_go_around({"force_go_around": False}, {})
+
+    def test_never_sent_around_once_the_aircraft_is_down(self, monkeypatch):
+        monkeypatch.setattr(config, "GO_AROUND_PROBABILITY", 1.0)
+        assert not should_go_around({}, {"landed": True})
+        assert not should_go_around({"force_go_around": True}, {"runway_vacated": True})
+
+
+class TestTheGoAround:
+    def test_the_ordinary_approach_lands(self):
+        session = _at_landing_readback()
+        resp = process_transmission(
+            session.session_id, DecisionRequest(pilot_utterance=GOOD_LANDING_READBACK)
+        )
+        assert resp.next_state_id == "PILOT_RUNWAY_VACATED"
+        assert "go around" not in _say(resp)
+
+    def test_tower_uses_the_standard_phraseology(self):
+        session = _at_landing_readback(force_go_around=True)
+        resp = process_transmission(
+            session.session_id, DecisionRequest(pilot_utterance=GOOD_LANDING_READBACK)
+        )
+        said = _say(resp)
+        # Given twice: it has to be acted on before it is understood.
+        assert said.count("go around") >= 2, said
+        assert "3000" in said, said
+        assert resp.next_state_id == "PILOT_GO_AROUND_READBACK"
+
+    def test_a_wrong_landing_readback_gets_the_correction_not_a_go_around(self):
+        session = _at_landing_readback(force_go_around=True)
+        resp = process_transmission(session.session_id, DecisionRequest(
+            pilot_utterance="cleared to land, DLH6RK",
+        ))
+        assert "go around" not in _say(resp), _say(resp)
+        assert resp.next_state_id == "PILOT_LANDING_READBACK"
+
+    def test_the_climb_is_read_back_and_graded(self):
+        session = _at_landing_readback(force_go_around=True)
+        process_transmission(
+            session.session_id, DecisionRequest(pilot_utterance=GOOD_LANDING_READBACK)
+        )
+        wrong = process_transmission(session.session_id, DecisionRequest(
+            pilot_utterance="going around, climbing 5000 feet, DLH6RK",
+        ))
+        assert wrong.next_state_id == "PILOT_GO_AROUND_READBACK", "wrong altitude accepted"
+
+        good = process_transmission(session.session_id, DecisionRequest(
+            pilot_utterance="going around, climbing 3000 feet, DLH6RK",
+        ))
+        assert "approach" in _say(good), _say(good)
+
+    def test_a_go_around_goes_back_to_approach_not_to_ground(self):
+        """The aircraft is flying another approach — it must not be taxied."""
+        session = _at_landing_readback(force_go_around=True)
+        process_transmission(
+            session.session_id, DecisionRequest(pilot_utterance=GOOD_LANDING_READBACK)
+        )
+        process_transmission(session.session_id, DecisionRequest(
+            pilot_utterance="going around, climbing 3000 feet, DLH6RK",
+        ))
+        resp = process_transmission(session.session_id, DecisionRequest(
+            pilot_utterance="119.000, DLH6RK",
+        ))
+        assert resp.next_state_id == "TOWER_GO_AROUND_COMPLETE", resp.next_state_id
+        assert resp.active_flow == "ifr-tower-landing-v1", (
+            f"chained to {resp.active_flow} — a go-around does not taxi in"
+        )

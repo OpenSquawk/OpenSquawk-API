@@ -140,10 +140,12 @@ class DecisionState(BaseModel):
     is_emergency: bool = False
 
     # A correct readback at this state may, very rarely, be answered by Tower
-    # cancelling the takeoff instead of confirming it. Set on the takeoff
-    # clearance readback; the engine rolls for it (see app/rto.py) and the flow
-    # carries the guarded branch. Never fires once the aircraft is airborne.
+    # intervening instead of confirming: cancelling the takeoff, or sending the
+    # approach around. Set on the takeoff / landing clearance readback; the
+    # engine rolls for it (see app/interventions.py) and the flow carries the
+    # guarded branch.
     rto_eligible: bool = False
+    go_around_eligible: bool = False
 
 
 class VariableDefinition(BaseModel):

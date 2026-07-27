@@ -22,11 +22,13 @@ READBACK_TIMEOUT_MS = int(os.getenv("READBACK_TIMEOUT_MS", "30000"))
 READBACK_SILENCE_MS = int(os.getenv("READBACK_SILENCE_MS", "12000"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
 
-# Chance that an ordinary departure has its takeoff clearance cancelled after a
-# correct readback, so a rejected takeoff can be met unannounced rather than
-# only as its own drill. Deliberately tiny; a session can override it outright
-# via the force_rto variable (see app/rto.py).
+# Chance that an ordinary departure has its takeoff clearance cancelled, and
+# that an ordinary approach is sent around, after a correct readback — so both
+# can be met unannounced rather than only as their own drills. Deliberately
+# tiny; a session overrides either outright via the force_rto / force_go_around
+# variables (see app/interventions.py).
 RTO_PROBABILITY = float(os.getenv("RTO_PROBABILITY", "0.002"))
+GO_AROUND_PROBABILITY = float(os.getenv("GO_AROUND_PROBABILITY", "0.002"))
 
 # Which radiotelephony phraseology the controller uses: "icao", "faa", or
 # "auto" (default) to derive it from the airport's ICAO location indicator.

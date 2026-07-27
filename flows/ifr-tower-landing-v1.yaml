@@ -6,6 +6,9 @@ description: "IFR pilot established on the ILS contacts Tower, is cleared to lan
 start_state: ESTABLISHED_CONTACT
 end_states:
   - TOWER_LANDING_COMPLETE
+  # A go-around does not end at the stand: the aircraft goes back to Approach
+  # for another approach, so it gets its own terminal state.
+  - TOWER_GO_AROUND_COMPLETE
 
 # After vacating, the pilot taxis in to the stand on the Ground frequency.
 next_flow: taxi-in-v1
@@ -29,11 +32,27 @@ variables:
     type: string
     initial: "121.800"
     mutable_by: action_only
+  approach_freq:
+    type: string
+    initial: "119.000"
+    mutable_by: action_only
+  # Missed-approach climb altitude. The real one comes from the approach chart;
+  # this is the flow default for a session that supplies none.
+  go_around_altitude:
+    type: string
+    initial: "3000"
+    mutable_by: action_only
 
 flags:
   landing_cleared:
     initial: false
   runway_vacated:
+    initial: false
+  # Set by the engine when it decides this approach is sent around, and read by
+  # the guarded branch off the landing readback.
+  go_around_triggered:
+    initial: false
+  go_around_flown:
     initial: false
 
 states:
@@ -111,7 +130,18 @@ states:
       - runway
     readback_mode: simple
 
+    # Very occasionally Tower sends the approach around instead of confirming.
+    # The engine rolls for it once the readback is graded correct — see
+    # app/interventions.py.
+    go_around_eligible: true
+
     ok_next:
+      - to: ATC_GO_AROUND
+        trigger: ".*"
+        condition:
+          type: flag_check
+          name: go_around_triggered
+        label: "Tower sends the approach around"
       - to: ATC_LANDING_READBACK_CORRECT
         trigger: ".*"
         label: "Landing readback evaluated — correct"
@@ -240,6 +270,144 @@ states:
     auto_transitions:
       - to: PILOT_GROUND_FREQ_READBACK
         label: "Correction given — pilot to try again"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 5a. Go-around — Tower breaks off the approach
+  # ─────────────────────────────────────────────────────────────────────────────
+  # ICAO phraseology: the instruction is given twice, because it has to be acted
+  # on before it is understood. The missed-approach altitude and the runway go
+  # with it so the crew has somewhere to go.
+  ATC_GO_AROUND:
+    role: atc
+    phase: tower
+    name: "Tower Orders a Go-Around"
+    description: "Tower breaks off the approach and sends the aircraft around"
+    say_template: "{{callsign}}, GO AROUND, I say again, GO AROUND. Climb altitude {{go_around_altitude}} feet, runway heading, report passing {{go_around_altitude}} feet."
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_GO_AROUND_READBACK
+        label: "Go-around ordered — awaiting readback"
+        on_enter_actions:
+          - type: set_flag
+            target: go_around_flown
+            value: true
+
+  PILOT_GO_AROUND_READBACK:
+    role: pilot
+    phase: tower
+    name: "Pilot Reads Back the Go-Around"
+    description: "Pilot acknowledges the go-around and reads back the climb altitude"
+    expected_pilot_template: "Going around, climbing {{go_around_altitude}} feet, {{callsign}}"
+    frequency_name: "Tower"
+
+    readback_required:
+      - go_around_altitude
+    readback_mode: simple
+
+    ok_next:
+      - to: ATC_GO_AROUND_VECTOR
+        trigger: ".*"
+        label: "Go-around readback evaluated — correct"
+
+    bad_next:
+      - to: ATC_GO_AROUND_READBACK_INCORRECT
+        label: "Readback missing the climb altitude — controller corrects"
+
+    auto_transitions: []
+
+  ATC_GO_AROUND_READBACK_INCORRECT:
+    role: atc
+    phase: tower
+    name: "Tower Repeats the Go-Around"
+    description: "Controller repeats the go-around instruction and the climb altitude"
+    say_template: "{{callsign}}, go around, climb altitude {{go_around_altitude}} feet, acknowledge"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_GO_AROUND_READBACK
+        label: "Repeated — pilot to acknowledge"
+
+  # The aircraft is going back around for another approach, so it stays with
+  # Tower and is handed to Approach for re-sequencing rather than to Ground.
+  ATC_GO_AROUND_VECTOR:
+    role: atc
+    phase: tower
+    name: "Tower Re-sequences the Approach"
+    description: "Tower acknowledges the go-around and hands the aircraft back to Approach"
+    say_template: "{{callsign}}, roger, contact Approach {{approach_freq}} for re-sequencing"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_GO_AROUND_FREQ_READBACK
+        label: "Handed back to Approach — awaiting frequency readback"
+
+  PILOT_GO_AROUND_FREQ_READBACK:
+    role: pilot
+    phase: tower
+    name: "Pilot Reads Back the Approach Frequency"
+    description: "Pilot reads back the approach frequency after the go-around"
+    expected_pilot_template: "{{approach_freq}}, {{callsign}}"
+    frequency_name: "Tower"
+
+    readback_required:
+      - approach_freq
+    readback_mode: simple
+
+    ok_next:
+      - to: ATC_GO_AROUND_HANDOFF_CONFIRMED
+        trigger: ".*"
+        label: "Frequency readback evaluated — correct"
+
+    bad_next:
+      - to: ATC_GO_AROUND_FREQ_READBACK_INCORRECT
+        label: "Readback missing the approach frequency — controller corrects"
+
+    auto_transitions: []
+
+  ATC_GO_AROUND_FREQ_READBACK_INCORRECT:
+    role: atc
+    phase: tower
+    name: "Tower Corrects the Approach Frequency Readback"
+    description: "Controller repeats the approach frequency"
+    say_template: "Negative, {{callsign}}, Approach on {{approach_freq}}"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_GO_AROUND_FREQ_READBACK
+        label: "Correction given — pilot to try again"
+
+  ATC_GO_AROUND_HANDOFF_CONFIRMED:
+    role: atc
+    phase: tower
+    name: "Tower Releases the Pilot to Approach"
+    description: "Tower acknowledges the correct frequency readback and releases the pilot"
+    say_template: "{{callsign}}, good day"
+    frequency_name: "Tower"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: TOWER_GO_AROUND_COMPLETE
+        label: "Go-around handled — back to Approach for another approach"
+
+  TOWER_GO_AROUND_COMPLETE:
+    role: system
+    phase: tower
+    name: "Go-Around Complete"
+    description: "The approach was broken off. Switch to Approach {{approach_freq}} for re-sequencing."
+
+    ok_next: []
+    bad_next: []
+    auto_transitions: []
 
   # ─────────────────────────────────────────────────────────────────────────────
   # 5b. Confirmations — a correct readback that leaves the pilot waiting
