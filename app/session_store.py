@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from app.config import SESSION_DB_PATH, SESSION_STORE_TYPE, SESSION_TTL_HOURS
+from app.enroute_route import resolve_enroute_clearance
 from app.models import DecisionFlow, RuntimeSession
 from app.phraseology import phrase_variables
 from app.pushback import assignable_facing
@@ -165,6 +166,18 @@ def create_session(
         derived = assignable_facing(str(variables.get("runway") or ""))
         if derived:
             variables["pushback_direction"] = derived
+
+    # The clearance grants the point where the SID hands over to the enroute
+    # structure, taken from the route the caller filed. A flight without a
+    # route keeps the flow's defaults, which are the no-route wording.
+    if "enroute_fixes" in variables and not (variable_overrides or {}).get("enroute_fixes"):
+        enroute = resolve_enroute_clearance(
+            str(variables.get("route") or ""),
+            sid=str(variables.get("sid") or "") or None,
+            airports=[code for code in (airport_icao, destination_icao) if code],
+        )
+        if enroute:
+            variables.update(enroute)
 
     session = RuntimeSession(
         session_id=sid,

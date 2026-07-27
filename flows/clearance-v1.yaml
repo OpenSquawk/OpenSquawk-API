@@ -33,6 +33,26 @@ variables:
     type: string
     initial: "BIBAX1N"
     mutable_by: action_only
+  # Where the SID hands over to the enroute structure. Derived at session
+  # create from the filed route (see app/enroute_route.py). The rest of the
+  # route is covered by "flight planned route": ten-plus elements including
+  # airways is not something a pilot reads back or STT survives.
+  #
+  # Empty list = no route was filed (demo and manual flights), and an empty
+  # list requires nothing of the readback — which is why this is a list and
+  # not a string. An unset or empty *string* in readback_required fails
+  # grading, so every routeless flight would be stuck on the readback.
+  enroute_fixes:
+    type: list
+    initial: []
+    mutable_by: action_only
+  # Ready-to-speak clause, e.g. ", then SULUS, flight planned route" or "".
+  # Computed from enroute_fixes; rendering "" cleanly drops the clause, so a
+  # flight without a route keeps the wording it has today.
+  enroute_clause:
+    type: string
+    initial: ""
+    mutable_by: action_only
   initial_altitude:
     type: string
     initial: "5000"
@@ -93,7 +113,7 @@ states:
     phase: clearance
     name: "ATC Issues IFR Clearance"
     description: "Controller reads out the full departure clearance: destination, SID name, initial altitude, and squawk code"
-    say_template: "{{callsign}}, cleared to {{destination}} via {{sid}} departure, climb initially {{initial_altitude}} feet, squawk {{squawk}}"
+    say_template: "{{callsign}}, cleared to {{destination}} via {{sid}} departure{{enroute_clause}}, climb initially {{initial_altitude}} feet, squawk {{squawk}}"
     frequency_name: "Clearance Delivery"
 
     ok_next: []
@@ -111,17 +131,21 @@ states:
     phase: clearance
     name: "Pilot Reads Back Clearance"
     description: "Pilot must read back destination, SID, initial altitude, squawk code, and own callsign"
-    expected_pilot_template: "Cleared {{destination}}, {{sid}}, climb initially {{initial_altitude}}, squawk {{squawk}}, {{callsign}}"
+    expected_pilot_template: "Cleared {{destination}}, {{sid}}{{enroute_clause}}, climb initially {{initial_altitude}}, squawk {{squawk}}, {{callsign}}"
     frequency_name: "Clearance Delivery"
 
     # The clearance limit is as safety-critical as the rest: a pilot who reads
     # back the wrong destination has misheard the clearance, even when SID,
     # level and squawk are verbatim correct.
+    #
+    # enroute_fixes is empty for a flight that filed no route, and an empty
+    # list requires nothing — so a demo flight is graded exactly as before.
     readback_required:
       - destination
       - sid
       - initial_altitude
       - squawk
+      - enroute_fixes
     readback_mode: simple
 
     ok_next:
@@ -141,7 +165,7 @@ states:
     phase: clearance
     name: "ATC Corrects Readback"
     description: "Controller tells the pilot the readback was incomplete and repeats the critical items"
-    say_template: "Negative, {{callsign}}, say again: {{sid}}, squawk {{squawk}}, climb initially {{initial_altitude}} feet"
+    say_template: "Negative, {{callsign}}, say again: {{sid}}{{enroute_clause}}, squawk {{squawk}}, climb initially {{initial_altitude}} feet"
     frequency_name: "Clearance Delivery"
 
     ok_next: []
