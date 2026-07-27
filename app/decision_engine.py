@@ -1404,6 +1404,22 @@ def _update_derived_distances(session: RuntimeSession) -> None:
         session.telemetry["distance_to_dest_nm"] = round(_haversine_nm(lat, lon, dest[0], dest[1]), 2)
 
 
+def _derived_position(session: RuntimeSession) -> Dict[str, float]:
+    """Distances to each end of the flight, and the height they hold at.
+
+    Returned to the frontend so the radio can decide which ground stations are
+    within VHF line of sight without shipping the airport coordinates to the
+    browser. Empty without a reported position, which the frontend reads as
+    "range unknown" rather than "out of range".
+    """
+    out: Dict[str, float] = {}
+    for key in ("distance_to_dep_nm", "distance_to_dest_nm", "altitude_ft"):
+        value = session.telemetry.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            out[key] = float(value)
+    return out
+
+
 def _no_op_telemetry_response(session: RuntimeSession, trace: List[TransitionTrace]) -> DecisionResponse:
     """A telemetry tick that fired nothing — state and speech unchanged."""
     return DecisionResponse(
@@ -1421,6 +1437,7 @@ def _no_op_telemetry_response(session: RuntimeSession, trace: List[TransitionTra
         auto_advanced_states=[],
         telemetry_fired=False,
         session_complete=False,
+        derived_position=_derived_position(session),
     )
 
 
@@ -1551,6 +1568,7 @@ def _finalize_transition(
         auto_advanced_states=auto_advanced_states,
         telemetry_fired=(match_reason == "telemetry"),
         session_complete=session_complete,
+        derived_position=_derived_position(session),
     )
 
 

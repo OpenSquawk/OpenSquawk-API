@@ -359,6 +359,14 @@ class DecisionResponse(BaseModel):
     # frontend ignore no-op telemetry polls without inspecting state diffs.
     telemetry_fired: bool = False
 
+    # Values derived from the reported position: great-circle distance to each
+    # end of the flight, and the height they were derived at. Returned so the
+    # radio can work out which ground stations are within VHF line of sight
+    # without the browser needing its own copy of the airport coordinates.
+    # Empty when no position has been reported (no bridge), which the frontend
+    # reads as "range unknown" rather than "out of range".
+    derived_position: Dict[str, float] = Field(default_factory=dict)
+
     # True when the session has reached a terminal end state (no further chaining
     # will happen).  The frontend uses this to show the completion screen.
     session_complete: bool = False
