@@ -175,3 +175,12 @@ console.log(decision.next_state_id);
 ```bash
 poetry run pytest
 ```
+
+## Lizenz
+
+AGPL-3.0-only. Der volle Lizenztext steht in [LICENSE](LICENSE).
+
+Wer diesen Dienst betreibt und über ein Netzwerk zugänglich macht, muss seinen
+Nutzern den Quelltext der betriebenen Fassung anbieten — inklusive eigener
+Änderungen. Dieselbe Lizenz gilt für die App unter
+[OpenSquawk/OpenSquawk](https://github.com/OpenSquawk/OpenSquawk).
