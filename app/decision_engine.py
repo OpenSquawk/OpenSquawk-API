@@ -736,6 +736,12 @@ def process_transmission(
     if selected_transition is None:
         _apply_pushback_facing(session, current_state, request.pilot_utterance, trace)
 
+    # --- Step 5e: Work out the vector back to the field for an emergency ---
+    # Also before matching: whether a vector is available decides which branch
+    # of the emergency flow ATC takes, so the flag has to be set by then.
+    if session.active_flow == _EMERGENCY_FLOW:
+        _update_emergency_vector(session, trace)
+
     # --- Step 6: Match utterance against state candidates (if not already an emergency) ---
     if selected_transition is None:
         selected_transition, match_reason, used_bad_next = _select_pilot_transition(
@@ -1302,6 +1308,62 @@ def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlam = radians(lon2 - lon1)
     a = sin(dphi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(dlam / 2) ** 2
     return 2 * _EARTH_RADIUS_NM * asin(sqrt(a))
+
+
+def _initial_bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle course from one position to another, 0..360."""
+    from math import atan2, cos, degrees, radians, sin
+    phi1, phi2 = radians(lat1), radians(lat2)
+    dlam = radians(lon2 - lon1)
+    y = sin(dlam) * cos(phi2)
+    x = cos(phi1) * sin(phi2) - sin(phi1) * cos(phi2) * cos(dlam)
+    return (degrees(atan2(y, x)) + 360.0) % 360.0
+
+
+def _session_position(session: RuntimeSession) -> Optional[Tuple[float, float]]:
+    """The aircraft's live position, or None when no bridge is reporting one."""
+    lat, lon = session.telemetry.get("lat"), session.telemetry.get("lon")
+    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+        return None
+    if isinstance(lat, bool) or isinstance(lon, bool):
+        return None
+    # 0/0 is the "no GPS data yet" default some bridges report.
+    if abs(lat) < 0.1 and abs(lon) < 0.1:
+        return None
+    return float(lat), float(lon)
+
+
+def _update_emergency_vector(session: RuntimeSession, trace: List[TransitionTrace]) -> None:
+    """Work out the heading back to the field, when the position is known.
+
+    A controller handling an emergency return gives a vector, not just a level.
+    Everything needed is already on the session: the bridge reports the
+    aircraft's position and the bundled dataset has the airport's, so the course
+    between them is the heading to fly.
+
+    Without a bridge there is no position and therefore no honest vector, so the
+    flag stays false and the flow takes its non-vectored branch rather than
+    inventing a heading.
+    """
+    position = _session_position(session)
+    field = airport_coords(session.airport_icao)
+    if position is None or field is None:
+        session.flags["emergency_vector_available"] = False
+        return
+
+    bearing = _initial_bearing_deg(position[0], position[1], field[0], field[1])
+    # Vectors are given to the nearest 5 degrees and spoken as three digits.
+    rounded = int(round(bearing / 5.0) * 5) % 360 or 360
+    session.variables["emergency_vector_heading"] = f"{rounded:03d}"
+    session.variables["emergency_vector_distance"] = str(
+        int(round(_haversine_nm(position[0], position[1], field[0], field[1])))
+    )
+    session.flags["emergency_vector_available"] = True
+    trace.append(_trace(
+        "emergency_vector",
+        f"Vector to {session.airport_icao}: heading {rounded:03d}, "
+        f"{session.variables['emergency_vector_distance']} nm",
+    ))
 
 
 def _update_derived_distances(session: RuntimeSession) -> None:

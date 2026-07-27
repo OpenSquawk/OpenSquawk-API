@@ -33,9 +33,24 @@ variables:
     type: string
     initial: ""
     mutable_by: action_only
+  # Heading and distance back to the field, computed by the engine from the
+  # bridge's position. Only rendered on the vectored branch, which is guarded on
+  # emergency_vector_available — without a bridge there is no honest vector.
+  emergency_vector_heading:
+    type: string
+    initial: ""
+    mutable_by: action_only
+  emergency_vector_distance:
+    type: string
+    initial: ""
+    mutable_by: action_only
 
 flags:
   emergency_handled:
+    initial: false
+  # True when the bridge reported a position the engine could turn into a
+  # heading back to the field.
+  emergency_vector_available:
     initial: false
 
 states:
@@ -213,10 +228,41 @@ states:
   # ─────────────────────────────────────────────────────────────────────────────
   # 4. One instruction per intention — each is an actual clearance, not an ack
   # ─────────────────────────────────────────────────────────────────────────────
+  # Silent switch: a controller vectoring an aircraft back gives a heading, but
+  # only a session with a sim bridge has a position to compute one from. This
+  # state says nothing itself, so the branch it takes supplies the transmission.
   ATC_EMERGENCY_RETURN:
     role: atc
+    name: "ATC Handles the Return"
+    description: "Routes to the vectored or non-vectored return clearance"
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: ATC_EMERGENCY_RETURN_VECTORED
+        condition:
+          type: flag_check
+          name: emergency_vector_available
+        label: "Position known — give a heading back to the field"
+      - to: ATC_EMERGENCY_RETURN_PLAIN
+        label: "No position — clear the return without a vector"
+
+  ATC_EMERGENCY_RETURN_VECTORED:
+    role: atc
+    name: "ATC Vectors the Return"
+    description: "ATC turns the aircraft back towards the field on a computed heading"
+    say_template: "{{callsign}}, roger, cleared to return. Turn heading {{emergency_vector_heading}}, descend altitude {{emergency_altitude}} feet, QNH {{qnh}}. The field is {{emergency_vector_distance}} miles, expect the approach runway {{runway}}."
+
+    ok_next: []
+    bad_next: []
+    auto_transitions:
+      - to: PILOT_APPROACH_READBACK
+        label: "Return cleared — awaiting readback"
+
+  ATC_EMERGENCY_RETURN_PLAIN:
+    role: atc
     name: "ATC Clears the Return"
-    description: "ATC turns the aircraft back towards the field and sets up the approach"
+    description: "ATC clears the return without a vector, the position being unknown"
     say_template: "{{callsign}}, roger, cleared to return. Descend altitude {{emergency_altitude}} feet, QNH {{qnh}}, expect vectors for the approach runway {{runway}}. Report when ready for the approach."
 
     ok_next: []
