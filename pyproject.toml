@@ -6,7 +6,7 @@ authors = ["najajan <jan@najajan.de>"]
 license = "AGPL-3.0-only"
 readme = "README.md"
 homepage = "https://opensquawk.de/"
-repository = "https://github.com/OpenSquawk/OpenSquawk-LiveATC-api"
+repository = "https://github.com/OpenSquawk/OpenSquawk-API"
 package-mode = false
 
 [tool.poetry.dependencies]
