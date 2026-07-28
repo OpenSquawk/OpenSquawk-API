@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import ALLOWED_ORIGINS, FLOWS_DIR, LOG_LEVEL
+from app.config import ALLOWED_ORIGIN_REGEX, ALLOWED_ORIGINS, FLOWS_DIR, LOG_LEVEL
 from app.flow_loader import load_all_flows
 from app.flow_validator import validate_flow
 from app.routes.decision_routes import router as decision_router
@@ -87,6 +87,7 @@ app.add_middleware(RequestLogMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX or None,
     allow_methods=["*"],
     allow_headers=["*"],
 )

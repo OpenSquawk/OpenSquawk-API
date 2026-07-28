@@ -73,3 +73,12 @@ ALLOWED_ORIGINS = [
     for origin in os.getenv("ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
     if origin.strip()
 ]
+
+# Every https subdomain of opensquawk.de, so a new one (app., staging., …) does
+# not need this file edited. Anchored at both ends on purpose: without the ^ and
+# $ it would also match `evil-opensquawk.de` and `opensquawk.de.attacker.com`,
+# which is the classic way a CORS allowlist stops being one.
+ALLOWED_ORIGIN_REGEX = os.getenv(
+    "ALLOWED_ORIGIN_REGEX",
+    r"^https://([a-z0-9-]+\.)*opensquawk\.de$",
+)
